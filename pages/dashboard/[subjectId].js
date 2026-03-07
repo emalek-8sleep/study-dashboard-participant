@@ -13,6 +13,7 @@ import {
 import ProgressTracker from '../../components/ProgressTracker';
 import DailyStatusCard from '../../components/DailyStatusCard';
 import CommentsSection from '../../components/CommentsSection';
+import ShippingCard from '../../components/ShippingCard';
 import Navbar from '../../components/Navbar';
 
 export async function getServerSideProps({ params }) {
@@ -60,9 +61,11 @@ export default function DashboardPage({
   const greeting     = config.dashboard_greeting || 'Welcome back';
   const firstName    = participant['First Name'] || 'Participant';
 
-  const todayStatus      = history[0] || null;
-  const hstUploadLink    = buildParticipantUrl(config.hst_upload_link || '', subjectId);
+  const todayStatus        = history[0] || null;
+  const hstUploadLink      = buildParticipantUrl(config.hst_upload_link || '', subjectId);
   const commentsConfigured = !!(config.comments_script_url || '').trim();
+  const trackingUrl        = participant['Tracking URL']    || '';
+  const trackingStatus     = participant['Tracking Status'] || '';
 
   // Attention: any check-in fields are invalid today
   const todayNeedsAttention = todayStatus &&
@@ -178,6 +181,9 @@ export default function DashboardPage({
               </Link>
             </div>
           </div>
+
+          {/* ── Shipping status ── */}
+          <ShippingCard trackingUrl={trackingUrl} trackingStatus={trackingStatus} />
 
           {/* ── Daily status + HST upload ── */}
           <section id="daily-status">
