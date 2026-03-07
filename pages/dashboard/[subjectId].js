@@ -35,6 +35,9 @@ export async function getServerSideProps({ params, req }) {
 
   const progress = deriveProgress(participant, phases);
 
+  // Build URLs here (server-side) since buildParticipantUrl isn't available client-side
+  const hstUploadLink = buildParticipantUrl(config.hst_upload_link || '', subjectId);
+
   return {
     props: {
       participant,
@@ -45,6 +48,7 @@ export async function getServerSideProps({ params, req }) {
       comments,
       shipments,
       subjectId,
+      hstUploadLink,
     },
   };
 }
@@ -58,6 +62,7 @@ export default function DashboardPage({
   comments,
   shipments,
   subjectId,
+  hstUploadLink,
 }) {
   const studyName    = config.study_name        || 'Study Participant Dashboard';
   const contactEmail = config.contact_email     || '';
@@ -65,7 +70,6 @@ export default function DashboardPage({
   const firstName    = participant['First Name'] || 'Participant';
 
   const todayStatus        = history[0] || null;
-  const hstUploadLink      = buildParticipantUrl(config.hst_upload_link || '', subjectId);
   const commentsConfigured = !!(config.comments_script_url || '').trim();
 
   // Attention: any check-in fields are invalid today
