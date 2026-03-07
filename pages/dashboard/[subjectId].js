@@ -55,8 +55,9 @@ export default function DashboardPage({
   comments,
   subjectId,
 }) {
-  const studyName    = config.study_name    || 'Study Participant Dashboard';
-  const contactEmail = config.contact_email || '';
+  const studyName    = config.study_name        || 'Study Participant Dashboard';
+  const contactEmail = config.contact_email     || '';
+  const greeting     = config.dashboard_greeting || 'Welcome back';
   const firstName    = participant['First Name'] || 'Participant';
 
   const todayStatus      = history[0] || null;
@@ -137,7 +138,7 @@ export default function DashboardPage({
           <div className="card bg-gradient-to-r from-brand-700 to-brand-500 text-white border-none">
             <div className="flex flex-col sm:flex-row sm:items-center gap-4">
               <div className="flex-1">
-                <p className="text-brand-200 text-sm font-medium mb-1">Welcome back</p>
+                <p className="text-brand-200 text-sm font-medium mb-1">{greeting}</p>
                 <h1 className="text-2xl font-bold">{firstName}</h1>
                 <p className="text-brand-100 text-sm mt-1">Subject ID: {subjectId}</p>
               </div>
