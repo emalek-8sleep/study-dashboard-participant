@@ -1,0 +1,60 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply text-slate-800;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  body {
+    @apply bg-slate-50 min-h-screen;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-2xl shadow-sm border border-slate-100 p-6;
+  }
+
+  .btn-primary {
+    @apply bg-brand-600 hover:bg-brand-700 text-white font-semibold px-6 py-3 rounded-xl
+           transition-all duration-150 shadow-sm hover:shadow-md disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  .btn-secondary {
+    @apply bg-white hover:bg-slate-50 text-slate-700 font-medium px-5 py-2.5 rounded-xl
+           border border-slate-200 transition-all duration-150;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-semibold;
+  }
+
+  .badge-complete {
+    @apply badge bg-emerald-100 text-emerald-700;
+  }
+
+  .badge-inprogress {
+    @apply badge bg-blue-100 text-blue-700;
+  }
+
+  .badge-pending {
+    @apply badge bg-slate-100 text-slate-500;
+  }
+
+  .badge-missed {
+    @apply badge bg-red-100 text-red-600;
+  }
+
+  .section-title {
+    @apply text-lg font-semibold text-slate-800 mb-1;
+  }
+
+  .section-subtitle {
+    @apply text-sm text-slate-500 mb-4;
+  }
+}
