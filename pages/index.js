@@ -2,25 +2,31 @@ import { useState } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 import { getStudyConfig } from '../lib/sheets';
+import { getStudies } from '../lib/studies';
 
 export async function getServerSideProps() {
-  const config = await getStudyConfig();
-  return { props: { config } };
+  const studies = getStudies();
+  // Load config from the first/default study for login page branding
+  const config  = studies.length > 0 ? await getStudyConfig(studies[0].sheetId) : {};
+  return { props: { config, studies } };
 }
 
-export default function LoginPage({ config }) {
+export default function LoginPage({ config, studies }) {
   const router = useRouter();
-  const [subjectId, setSubjectId]   = useState('');
-  const [verifyVal, setVerifyVal]   = useState('');
-  const [loading, setLoading]       = useState(false);
-  const [error, setError]           = useState('');
+  const [subjectId,    setSubjectId]    = useState('');
+  const [verifyVal,    setVerifyVal]    = useState('');
+  const [studySlug,    setStudySlug]    = useState(studies[0]?.slug || '');
+  const [loading,      setLoading]      = useState(false);
+  const [error,        setError]        = useState('');
 
-  const studyName         = config.study_name         || 'Study Participant Dashboard';
-  const logoText          = config.logo_text          || studyName.split(' ').slice(0, 2).join(' ');
-  const welcomeMsg        = config.welcome_message    || 'Enter your Subject ID to access your personalized study dashboard.';
-  const contactEmail      = config.contact_email      || '';
-  const verificationField = config.verification_field || '';   // e.g. "Date of Birth"
-  const verificationLabel = config.verification_label || verificationField || '';
+  const multiStudy = studies.length > 1;
+
+  const studyName             = config.study_name             || 'Study Participant Dashboard';
+  const logoText              = config.logo_text              || studyName.split(' ').slice(0, 2).join(' ');
+  const welcomeMsg            = config.welcome_message        || 'Enter your Subject ID to access your personalized study dashboard.';
+  const contactEmail          = config.contact_email          || '';
+  const verificationField     = config.verification_field     || '';
+  const verificationLabel     = config.verification_label     || verificationField || '';
   const verificationPlaceholder = config.verification_placeholder || '';
 
   const requiresVerification = !!verificationField;
@@ -43,7 +49,7 @@ export default function LoginPage({ config }) {
     setError('');
 
     try {
-      const params = new URLSearchParams({ id: trimmedId });
+      const params = new URLSearchParams({ id: trimmedId, study: studySlug });
       if (requiresVerification) params.set('verify', trimmedVal);
 
       const res  = await fetch(`/api/participant?${params.toString()}`);
@@ -68,7 +74,7 @@ export default function LoginPage({ config }) {
   return (
     <>
       <Head>
-        <title>{studyName}</title>
+        <title>{multiStudy ? 'Study Participant Dashboard' : studyName}</title>
         <meta name="description" content="Study participant portal" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
       </Head>
@@ -88,16 +94,51 @@ export default function LoginPage({ config }) {
                   d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
               </svg>
             </div>
-            <h1 className="text-3xl font-bold text-white tracking-tight">{studyName}</h1>
-            <p className="text-brand-200 mt-2 text-sm">Participant Portal</p>
+            <h1 className="text-3xl font-bold text-white tracking-tight">
+              {multiStudy ? 'Participant Portal' : studyName}
+            </h1>
+            <p className="text-brand-200 mt-2 text-sm">
+              {multiStudy ? 'Eight Sleep Research Studies' : 'Participant Portal'}
+            </p>
           </div>
 
           {/* Login card */}
           <div className="bg-white rounded-2xl shadow-2xl p-8">
             <h2 className="text-xl font-semibold text-slate-800 mb-1">Welcome</h2>
-            <p className="text-slate-500 text-sm mb-6">{welcomeMsg}</p>
+            <p className="text-slate-500 text-sm mb-6">
+              {multiStudy
+                ? 'Select your study and enter your Subject ID to access your dashboard.'
+                : welcomeMsg}
+            </p>
 
             <form onSubmit={handleSubmit} className="space-y-4">
+
+              {/* Study selector — only shown when multiple studies are configured */}
+              {multiStudy && (
+                <div>
+                  <label htmlFor="studySelect" className="block text-sm font-medium text-slate-700 mb-1.5">
+                    Study
+                  </label>
+                  <div className="relative">
+                    <select
+                      id="studySelect"
+                      value={studySlug}
+                      onChange={(e) => { setStudySlug(e.target.value); setError(''); }}
+                      className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-slate-800 text-sm transition appearance-none bg-white pr-10"
+                    >
+                      {studies.map((s) => (
+                        <option key={s.slug} value={s.slug}>{s.name}</option>
+                      ))}
+                    </select>
+                    <div className="pointer-events-none absolute inset-y-0 right-3 flex items-center">
+                      <svg className="w-4 h-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Subject ID */}
               <div>
                 <label htmlFor="subjectId" className="block text-sm font-medium text-slate-700 mb-1.5">

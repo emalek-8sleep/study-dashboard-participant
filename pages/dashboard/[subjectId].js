@@ -11,23 +11,29 @@ import {
   deriveProgress,
   buildParticipantUrl,
 } from '../../lib/sheets';
-import ProgressTracker from '../../components/ProgressTracker';
-import DailyStatusCard from '../../components/DailyStatusCard';
-import CommentsSection from '../../components/CommentsSection';
-import ShippingCard from '../../components/ShippingCard';
-import Navbar from '../../components/Navbar';
+import { getSheetIdBySlug } from '../../lib/studies';
+import ProgressTracker   from '../../components/ProgressTracker';
+import DailyStatusCard   from '../../components/DailyStatusCard';
+import CommentsSection   from '../../components/CommentsSection';
+import ShippingCard      from '../../components/ShippingCard';
+import Navbar            from '../../components/Navbar';
 
-export async function getServerSideProps({ params }) {
+export async function getServerSideProps({ params, req }) {
   const { subjectId } = params;
 
+  // Determine which study's sheet to use based on the active_study cookie
+  const cookies   = parseCookies(req.headers.cookie || '');
+  const studySlug = decodeURIComponent(cookies['active_study'] || '');
+  const sheetId   = getSheetIdBySlug(studySlug);
+
   const [participant, config, phases, history, checkinFields, comments, shipments] = await Promise.all([
-    getParticipant(subjectId),
-    getStudyConfig(),
-    getPhases(),
-    getDailyStatusHistory(subjectId),
-    getCheckinFields(),
-    getComments(subjectId),
-    getShipments(subjectId),
+    getParticipant(subjectId, sheetId),
+    getStudyConfig(sheetId),
+    getPhases(sheetId),
+    getDailyStatusHistory(subjectId, sheetId),
+    getCheckinFields(sheetId),
+    getComments(subjectId, sheetId),
+    getShipments(subjectId, sheetId),
   ]);
 
   if (!participant) {
@@ -85,10 +91,10 @@ export default function DashboardPage({
   const currentPhase  = progress.find((p) => p.status === 'inprogress') || progress.find((p) => p.status === 'pending');
 
   // Show setup wizard link when participant is in the configured setup phase
-  const setupPhaseName  = (config.setup_phase || '').trim().toLowerCase();
-  const inSetupPhase    = setupPhaseName && currentPhase &&
+  const setupPhaseName = (config.setup_phase || '').trim().toLowerCase();
+  const inSetupPhase   = setupPhaseName && currentPhase &&
     currentPhase.phaseName.toLowerCase().includes(setupPhaseName);
-  const setupHref       = `/setup/${encodeURIComponent(subjectId)}`;
+  const setupHref      = `/setup/${encodeURIComponent(subjectId)}`;
 
   return (
     <>
@@ -263,4 +269,13 @@ export default function DashboardPage({
 function isInvalid(val) {
   const v = (val || '').toString().toLowerCase().trim();
   return v === 'no' || v === 'false' || v === 'incomplete' || v === 'invalid' || v === 'fail';
+}
+
+function parseCookies(cookieHeader) {
+  const result = {};
+  cookieHeader.split(';').forEach((pair) => {
+    const [key, ...rest] = pair.trim().split('=');
+    if (key) result[key.trim()] = rest.join('=').trim();
+  });
+  return result;
 }

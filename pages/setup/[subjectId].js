@@ -8,19 +8,25 @@
  * Tips are pipe-separated: "Keep pod flat | Avoid folding"
  */
 
-import Head from 'next/head';
+import Head   from 'next/head';
 import { useState } from 'react';
-import Link from 'next/link';
+import Link   from 'next/link';
 import { getParticipant, getStudyConfig, getSetupSteps } from '../../lib/sheets';
+import { getSheetIdBySlug } from '../../lib/studies';
 import Navbar from '../../components/Navbar';
 
-export async function getServerSideProps({ params }) {
+export async function getServerSideProps({ params, req }) {
   const { subjectId } = params;
 
+  // Determine which study's sheet to use based on the active_study cookie
+  const cookies   = parseCookies(req.headers.cookie || '');
+  const studySlug = decodeURIComponent(cookies['active_study'] || '');
+  const sheetId   = getSheetIdBySlug(studySlug);
+
   const [participant, config, steps] = await Promise.all([
-    getParticipant(subjectId),
-    getStudyConfig(),
-    getSetupSteps(),
+    getParticipant(subjectId, sheetId),
+    getStudyConfig(sheetId),
+    getSetupSteps(sheetId),
   ]);
 
   if (!participant) {
@@ -338,4 +344,13 @@ export default function SetupPage({ config, steps, subjectId }) {
       </div>
     </>
   );
+}
+
+function parseCookies(cookieHeader) {
+  const result = {};
+  cookieHeader.split(';').forEach((pair) => {
+    const [key, ...rest] = pair.trim().split('=');
+    if (key) result[key.trim()] = rest.join('=').trim();
+  });
+  return result;
 }
