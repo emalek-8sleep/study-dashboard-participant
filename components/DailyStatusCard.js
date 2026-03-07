@@ -137,7 +137,7 @@ function HistoryRow({ row, checkinFields, config }) {
         onClick={() => setOpen(!open)}
         className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 transition"
       >
-        <span className="text-xs font-medium text-slate-500 w-36 shrink-0">
+        <span className="text-xs font-medium text-slate-500 w-24 sm:w-36 shrink-0 truncate">
           {formatDate(row['Date'], true)}
         </span>
 

@@ -249,7 +249,7 @@ function AdminDashboard({ studyName, summaries, stats }) {
         <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
 
           {/* ── Stats cards ── */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4">
             <StatCard label="Total Participants" value={stats.total} color="slate" />
             <StatCard label="Check-in Issues" value={stats.withIssues} color="red" alert={stats.withIssues > 0} />
             <StatCard label="Open Questions" value={stats.openComments} color="amber" alert={stats.openComments > 0} />
@@ -265,7 +265,7 @@ function AdminDashboard({ studyName, summaries, stats }) {
               onChange={(e) => setSearch(e.target.value)}
               className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
             />
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               {[
                 { key: 'all',      label: `All (${stats.total})` },
                 { key: 'issues',   label: `Issues (${stats.withIssues})` },
@@ -275,7 +275,7 @@ function AdminDashboard({ studyName, summaries, stats }) {
                 <button
                   key={f.key}
                   onClick={() => setFilter(f.key)}
-                  className={`px-3 py-2 rounded-xl text-xs font-semibold transition ${
+                  className={`px-3 py-2.5 rounded-xl text-xs font-semibold transition min-h-[40px] ${
                     filter === f.key
                       ? 'bg-slate-800 text-white'
                       : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'
@@ -287,29 +287,46 @@ function AdminDashboard({ studyName, summaries, stats }) {
             </div>
           </div>
 
-          {/* ── Participant table ── */}
-          <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
-            {/* Table header */}
-            <div className="grid grid-cols-[1fr_1fr_1fr_1fr_80px_80px] gap-4 px-5 py-3 bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-500 uppercase tracking-wide">
-              <span>Participant</span>
-              <span>Phase</span>
-              <span>Progress</span>
-              <span>Last Check-in</span>
-              <span>Issues</span>
-              <span>Questions</span>
-            </div>
+          {/* ── Participant table (desktop) / cards (mobile) ── */}
 
+          {/* Mobile: card list */}
+          <div className="md:hidden space-y-3">
             {filtered.length === 0 ? (
-              <div className="text-center py-12 text-slate-400 text-sm">
+              <div className="text-center py-12 text-slate-400 text-sm bg-white rounded-2xl border border-slate-100">
                 No participants match your filter.
               </div>
-            ) : (
-              <div className="divide-y divide-slate-50">
-                {filtered.map((s) => (
-                  <ParticipantRow key={s.id} s={s} />
-                ))}
+            ) : filtered.map((s) => (
+              <ParticipantCard key={s.id} s={s} />
+            ))}
+          </div>
+
+          {/* Desktop: scrollable table */}
+          <div className="hidden md:block bg-white rounded-2xl border border-slate-100 overflow-hidden">
+            <div className="overflow-x-auto">
+              <div className="min-w-[700px]">
+                {/* Table header */}
+                <div className="grid grid-cols-[1fr_1fr_1fr_1fr_80px_80px] gap-4 px-5 py-3 bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                  <span>Participant</span>
+                  <span>Phase</span>
+                  <span>Progress</span>
+                  <span>Last Check-in</span>
+                  <span>Issues</span>
+                  <span>Questions</span>
+                </div>
+
+                {filtered.length === 0 ? (
+                  <div className="text-center py-12 text-slate-400 text-sm">
+                    No participants match your filter.
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-50">
+                    {filtered.map((s) => (
+                      <ParticipantRow key={s.id} s={s} />
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
 
         </main>
@@ -418,6 +435,78 @@ function ParticipantRow({ s }) {
         ) : (
           <span className="text-xs text-slate-300">—</span>
         )}
+      </div>
+    </a>
+  );
+}
+
+// ─── Mobile participant card ──────────────────────────────────────────────────
+
+function ParticipantCard({ s }) {
+  const hasIssues   = s.issueCount > 0;
+  const hasComments = s.openComments > 0;
+  const urgent      = hasIssues || hasComments;
+
+  return (
+    <a
+      href={`/dashboard/${encodeURIComponent(s.id)}`}
+      target="_blank"
+      rel="noopener noreferrer"
+      className={`block bg-white rounded-2xl border p-4 hover:shadow-sm transition ${
+        urgent ? 'border-red-100' : 'border-slate-100'
+      }`}
+    >
+      {/* Top row: ID + badges */}
+      <div className="flex items-start justify-between gap-2 mb-3">
+        <div>
+          <span className="text-sm font-bold text-slate-800">{s.id}</span>
+          {(s.firstName || s.lastName) && (
+            <span className="text-xs text-slate-400 ml-2">{s.firstName} {s.lastName}</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          {hasIssues && (
+            <span className="inline-flex items-center gap-1 bg-red-100 text-red-600 text-xs font-bold px-2 py-0.5 rounded-full">
+              {s.issueCount} issue{s.issueCount > 1 ? 's' : ''}
+            </span>
+          )}
+          {hasComments && (
+            <span className="inline-flex items-center gap-1 bg-amber-100 text-amber-700 text-xs font-bold px-2 py-0.5 rounded-full">
+              {s.openComments} Q
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Details row */}
+      <div className="flex items-center gap-4 text-xs text-slate-500">
+        {/* Phase */}
+        {s.currentPhase && (
+          <span className={`px-2 py-0.5 rounded-full font-medium ${
+            s.currentPhaseStatus === 'inprogress' ? 'bg-brand-50 text-brand-700' : 'bg-slate-100 text-slate-500'
+          }`}>
+            {s.currentPhase}
+          </span>
+        )}
+
+        {/* Progress */}
+        {s.totalDays > 0 && (
+          <div className="flex items-center gap-1.5 flex-1">
+            <div className="flex-1 bg-slate-100 rounded-full h-1.5 max-w-[60px]">
+              <div className="bg-brand-500 h-1.5 rounded-full" style={{ width: `${s.pct}%` }} />
+            </div>
+            <span className="font-medium text-slate-500">{s.pct}%</span>
+          </div>
+        )}
+
+        {/* Check-in */}
+        <span className={`ml-auto font-medium ${
+          s.noData ? 'text-slate-300' : s.checkinGood ? 'text-emerald-600' : 'text-slate-400'
+        }`}>
+          {s.noData ? 'No data' : s.checkinGood ? '✓ All good' : s.checkinDate
+            ? new Date(s.checkinDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+            : '—'}
+        </span>
       </div>
     </a>
   );

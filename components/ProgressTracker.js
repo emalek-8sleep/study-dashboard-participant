@@ -158,7 +158,7 @@ export default function ProgressTracker({ progress }) {
                 )}
 
                 {/* Description and goal */}
-                <div className="grid sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {phase.description && (
                     <div>
                       <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">About this phase</p>

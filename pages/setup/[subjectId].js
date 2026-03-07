@@ -113,7 +113,7 @@ export default function SetupPage({ config, steps, subjectId }) {
             <div className="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
               <Link
                 href={`/dashboard/${encodeURIComponent(subjectId)}`}
-                className="btn-primary inline-flex items-center gap-2"
+                className="btn-primary inline-flex items-center justify-center gap-2 w-full sm:w-auto py-3 sm:py-2.5"
               >
                 Go to My Dashboard
                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -179,7 +179,7 @@ export default function SetupPage({ config, steps, subjectId }) {
           </div>
 
           {/* ── Progress dots ── */}
-          <div className="flex items-center gap-2 mb-6 flex-wrap">
+          <div className="flex items-center gap-2 mb-6 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-none">
             {steps.map((s, i) => (
               <button
                 key={i}
@@ -268,11 +268,11 @@ export default function SetupPage({ config, steps, subjectId }) {
           </div>
 
           {/* ── Navigation ── */}
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-3">
             <button
               onClick={goPrev}
               disabled={isFirst}
-              className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition"
+              className="inline-flex items-center justify-center gap-2 w-full sm:w-auto px-4 py-3 sm:py-2.5 text-sm font-medium text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 disabled:opacity-30 disabled:cursor-not-allowed transition"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
@@ -282,7 +282,7 @@ export default function SetupPage({ config, steps, subjectId }) {
 
             <button
               onClick={goNext}
-              className="btn-primary inline-flex items-center gap-2"
+              className="btn-primary inline-flex items-center justify-center gap-2 w-full sm:w-auto py-3 sm:py-2.5"
             >
               {isLast ? (
                 <>
@@ -310,7 +310,7 @@ export default function SetupPage({ config, steps, subjectId }) {
                 <button
                   key={i}
                   onClick={() => setCurrentStep(i)}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-left transition text-sm ${
+                  className={`w-full flex items-center gap-3 px-3 py-3 sm:py-2 rounded-lg text-left transition text-sm ${
                     i === currentStep
                       ? 'bg-brand-50 text-brand-700 font-semibold'
                       : 'text-slate-500 hover:bg-slate-50'

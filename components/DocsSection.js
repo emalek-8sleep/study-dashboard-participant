@@ -30,7 +30,7 @@ export default function DocsSection({ docs }) {
             <span>{getIcon(category)}</span>
             <span>{category}</span>
           </h3>
-          <div className="grid sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             {items.map((doc, i) => (
               <a
                 key={i}
