@@ -12,10 +12,10 @@
  * If the Study Config has a `verification_field` key set (e.g. "Date of Birth"),
  * the `verify` query param is required and must match that column in Participants.
  */
-import { getParticipant, getStudyConfig } from '../../lib/sheets';
-import { getSheetIdBySlug } from '../../lib/studies';
-
 export default async function handler(req, res) {
+  const { getParticipant, getStudyConfig } = await import('../../lib/sheets');
+  const { getSheetIdBySlug } = await import('../../lib/studies');
+
   const { id, verify, study } = req.query;
   if (!id) return res.status(400).json({ found: false, error: 'Missing id param' });
 

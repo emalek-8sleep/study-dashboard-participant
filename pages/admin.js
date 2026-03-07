@@ -14,20 +14,16 @@
 
 import Head    from 'next/head';
 import { useState } from 'react';
-import {
-  getStudyConfig,
-  getAllParticipants,
-  getAllDailyStatuses,
-  getAllComments,
-  getPhases,
-  getCheckinFields,
-  deriveProgress,
-} from '../lib/sheets';
-import { getStudies, getSheetIdBySlug } from '../lib/studies';
 
 // ─── Server-side ─────────────────────────────────────────────────────────────
 
 export async function getServerSideProps({ req, query }) {
+  const { getStudies, getSheetIdBySlug } = await import('../lib/studies');
+  const {
+    getStudyConfig, getAllParticipants, getAllDailyStatuses,
+    getAllComments, getPhases, getCheckinFields, deriveProgress,
+  } = await import('../lib/sheets');
+
   const studies = getStudies();
   const cookies = parseCookies(req.headers.cookie || '');
 

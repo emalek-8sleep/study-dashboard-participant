@@ -1,10 +1,13 @@
 import { useState } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
-import { getStudyConfig } from '../lib/sheets';
-import { getStudies } from '../lib/studies';
 
 export async function getServerSideProps() {
+  // Dynamically import server-only modules inside getServerSideProps
+  // so they are never bundled into the client-side JavaScript
+  const { getStudies } = await import('../lib/studies');
+  const { getStudyConfig } = await import('../lib/sheets');
+
   const studies = getStudies();
   // Load config from the first/default study for login page branding
   const config  = studies.length > 0 ? await getStudyConfig(studies[0].sheetId) : {};

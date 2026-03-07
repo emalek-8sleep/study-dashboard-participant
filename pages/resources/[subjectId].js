@@ -1,12 +1,12 @@
 import Head from 'next/head';
-import { getParticipant, getStudyConfig, getDocs, getTroubleshooting } from '../../lib/sheets';
-import { getSheetIdBySlug } from '../../lib/studies';
 import DocsSection          from '../../components/DocsSection';
 import TroubleshootingSection from '../../components/TroubleshootingSection';
 import Navbar               from '../../components/Navbar';
 
 export async function getServerSideProps({ params, req }) {
   const { subjectId } = params;
+  const { getSheetIdBySlug } = await import('../../lib/studies');
+  const { getParticipant, getStudyConfig, getDocs, getTroubleshooting } = await import('../../lib/sheets');
 
   // Determine which study's sheet to use based on the active_study cookie
   const cookies   = parseCookies(req.headers.cookie || '');

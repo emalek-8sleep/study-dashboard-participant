@@ -10,10 +10,9 @@
  * Each study has its own session cookie so coordinators can be logged into
  * multiple studies at once in the same browser.
  */
-import { getStudyConfig } from '../../lib/sheets';
-import { getSheetIdBySlug, getStudies } from '../../lib/studies';
-
 export default async function handler(req, res) {
+  const { getStudyConfig } = await import('../../lib/sheets');
+  const { getSheetIdBySlug, getStudies } = await import('../../lib/studies');
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }

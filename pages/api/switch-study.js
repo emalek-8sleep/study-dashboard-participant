@@ -9,9 +9,8 @@
  * for the admin code on the /admin page (since their session cookie for that
  * study won't exist yet).
  */
-import { getStudies } from '../../lib/studies';
-
-export default function handler(req, res) {
+export default async function handler(req, res) {
+  const { getStudies } = await import('../../lib/studies');
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }

@@ -1,17 +1,5 @@
 import Head from 'next/head';
 import Link from 'next/link';
-import {
-  getParticipant,
-  getStudyConfig,
-  getPhases,
-  getDailyStatusHistory,
-  getCheckinFields,
-  getComments,
-  getShipments,
-  deriveProgress,
-  buildParticipantUrl,
-} from '../../lib/sheets';
-import { getSheetIdBySlug } from '../../lib/studies';
 import ProgressTracker   from '../../components/ProgressTracker';
 import DailyStatusCard   from '../../components/DailyStatusCard';
 import CommentsSection   from '../../components/CommentsSection';
@@ -20,6 +8,11 @@ import Navbar            from '../../components/Navbar';
 
 export async function getServerSideProps({ params, req }) {
   const { subjectId } = params;
+  const { getSheetIdBySlug } = await import('../../lib/studies');
+  const {
+    getParticipant, getStudyConfig, getPhases, getDailyStatusHistory,
+    getCheckinFields, getComments, getShipments, deriveProgress, buildParticipantUrl,
+  } = await import('../../lib/sheets');
 
   // Determine which study's sheet to use based on the active_study cookie
   const cookies   = parseCookies(req.headers.cookie || '');
