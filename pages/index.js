@@ -3,48 +3,37 @@ import { useRouter } from 'next/router';
 import Head from 'next/head';
 
 export async function getServerSideProps() {
-  // Dynamically import server-only modules inside getServerSideProps
-  // so they are never bundled into the client-side JavaScript
+  // Only parse the STUDIES env var here — NO network calls.
+  // This keeps the login page instant (no Google Sheets fetch).
   const { getStudies } = await import('../lib/studies');
-  const { getStudyConfig } = await import('../lib/sheets');
-
   const studies = getStudies();
-  // Load config from the first/default study for login page branding
-  const config  = studies.length > 0 ? await getStudyConfig(studies[0].sheetId) : {};
-  return { props: { config, studies } };
+
+  // Strip sheetId from what we send to the client (keep it server-only)
+  const clientStudies = studies.map(({ name, slug }) => ({ name, slug }));
+  return { props: { studies: clientStudies } };
 }
 
-export default function LoginPage({ config, studies }) {
+export default function LoginPage({ studies }) {
   const router = useRouter();
   const [subjectId,    setSubjectId]    = useState('');
-  const [verifyVal,    setVerifyVal]    = useState('');
   const [studySlug,    setStudySlug]    = useState(studies[0]?.slug || '');
   const [loading,      setLoading]      = useState(false);
   const [error,        setError]        = useState('');
 
   const multiStudy = studies.length > 1;
 
-  const studyName             = config.study_name             || 'Study Participant Dashboard';
-  const logoText              = config.logo_text              || studyName.split(' ').slice(0, 2).join(' ');
-  const welcomeMsg            = config.welcome_message        || 'Enter your Subject ID to access your personalized study dashboard.';
-  const contactEmail          = config.contact_email          || '';
-  const verificationField     = config.verification_field     || '';
-  const verificationLabel     = config.verification_label     || verificationField || '';
-  const verificationPlaceholder = config.verification_placeholder || '';
-
-  const requiresVerification = !!verificationField;
+  // The login page uses simple defaults — study-specific config (branding,
+  // verification fields, etc.) is loaded on the dashboard AFTER login.
+  const studyName   = 'Study Participant Dashboard';
+  const welcomeMsg  = 'Enter your Subject ID to view your study progress and details.';
+  const contactEmail = '';
 
   async function handleSubmit(e) {
     e.preventDefault();
-    const trimmedId  = subjectId.trim();
-    const trimmedVal = verifyVal.trim();
+    const trimmedId = subjectId.trim();
 
     if (!trimmedId) {
       setError('Please enter your Subject ID.');
-      return;
-    }
-    if (requiresVerification && !trimmedVal) {
-      setError(`Please enter your ${verificationLabel}.`);
       return;
     }
 
@@ -53,19 +42,13 @@ export default function LoginPage({ config, studies }) {
 
     try {
       const params = new URLSearchParams({ id: trimmedId, study: studySlug });
-      if (requiresVerification) params.set('verify', trimmedVal);
-
       const res  = await fetch(`/api/participant?${params.toString()}`);
       const data = await res.json();
 
       if (data.found) {
         router.push(`/dashboard/${encodeURIComponent(trimmedId)}`);
       } else {
-        setError(
-          requiresVerification
-            ? "We couldn't verify your information. Please check your Subject ID and " + verificationLabel + ", then try again."
-            : "We couldn't find that Subject ID. Please double-check and try again, or contact your study coordinator."
-        );
+        setError("We couldn't find that Subject ID. Please double-check and try again, or contact your study coordinator.");
         setLoading(false);
       }
     } catch {
@@ -161,30 +144,6 @@ export default function LoginPage({ config, studies }) {
                 />
               </div>
 
-              {/* Secondary verification field — shown only when configured */}
-              {requiresVerification && (
-                <div>
-                  <label htmlFor="verifyVal" className="block text-sm font-medium text-slate-700 mb-1.5">
-                    {verificationLabel}
-                  </label>
-                  <input
-                    id="verifyVal"
-                    type="text"
-                    autoComplete="off"
-                    autoCorrect="off"
-                    autoCapitalize="off"
-                    spellCheck="false"
-                    value={verifyVal}
-                    onChange={(e) => { setVerifyVal(e.target.value); setError(''); }}
-                    placeholder={verificationPlaceholder || `Enter your ${verificationLabel}`}
-                    className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent text-slate-800 placeholder-slate-300 text-sm transition"
-                  />
-                  <p className="text-xs text-slate-400 mt-1.5">
-                    Used to verify your identity — we never share this.
-                  </p>
-                </div>
-              )}
-
               {error && (
                 <div className="flex items-start gap-2 text-red-600 bg-red-50 rounded-xl px-4 py-3 text-sm border border-red-100">
                   <svg className="w-4 h-4 mt-0.5 shrink-0" fill="currentColor" viewBox="0 0 20 20">
@@ -196,7 +155,7 @@ export default function LoginPage({ config, studies }) {
 
               <button
                 type="submit"
-                disabled={loading || !subjectId.trim() || (requiresVerification && !verifyVal.trim())}
+                disabled={loading || !subjectId.trim()}
                 className="btn-primary w-full flex items-center justify-center gap-2"
               >
                 {loading ? (
