@@ -7,6 +7,7 @@ import {
   getDailyStatusHistory,
   getCheckinFields,
   getComments,
+  getShipments,
   deriveProgress,
   buildParticipantUrl,
 } from '../../lib/sheets';
@@ -19,13 +20,14 @@ import Navbar from '../../components/Navbar';
 export async function getServerSideProps({ params }) {
   const { subjectId } = params;
 
-  const [participant, config, phases, history, checkinFields, comments] = await Promise.all([
+  const [participant, config, phases, history, checkinFields, comments, shipments] = await Promise.all([
     getParticipant(subjectId),
     getStudyConfig(),
     getPhases(),
     getDailyStatusHistory(subjectId),
     getCheckinFields(),
     getComments(subjectId),
+    getShipments(subjectId),
   ]);
 
   if (!participant) {
@@ -42,6 +44,7 @@ export async function getServerSideProps({ params }) {
       history,
       checkinFields,
       comments,
+      shipments,
       subjectId,
     },
   };
@@ -54,6 +57,7 @@ export default function DashboardPage({
   history,
   checkinFields,
   comments,
+  shipments,
   subjectId,
 }) {
   const studyName    = config.study_name        || 'Study Participant Dashboard';
@@ -64,8 +68,6 @@ export default function DashboardPage({
   const todayStatus        = history[0] || null;
   const hstUploadLink      = buildParticipantUrl(config.hst_upload_link || '', subjectId);
   const commentsConfigured = !!(config.comments_script_url || '').trim();
-  const trackingUrl        = participant['Tracking URL']    || '';
-  const trackingStatus     = participant['Tracking Status'] || '';
 
   // Attention: any check-in fields are invalid today
   const todayNeedsAttention = todayStatus &&
@@ -183,7 +185,7 @@ export default function DashboardPage({
           </div>
 
           {/* ── Shipping status ── */}
-          <ShippingCard trackingUrl={trackingUrl} trackingStatus={trackingStatus} />
+          <ShippingCard shipments={shipments} />
 
           {/* ── Daily status + HST upload ── */}
           <section id="daily-status">
