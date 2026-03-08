@@ -41,6 +41,7 @@ export default function OnboardingPage() {
   const [step, setStep]           = useState(1); // 1 | 2 | 3
   const [loading, setLoading]     = useState(false);
   const [error, setError]         = useState('');
+  const [skippedAI, setSkippedAI] = useState(false);
   const [formData, setFormData]   = useState({
     studyName:     '',
     contactEmail:  '',
@@ -410,6 +411,16 @@ export default function OnboardingPage() {
                     </>
                   )}
                 </button>
+
+                <div className="text-center mt-4">
+                  <button
+                    type="button"
+                    onClick={() => { setSkippedAI(true); setError(''); setStep(2); }}
+                    className="text-sm text-slate-500 hover:text-slate-700 transition"
+                  >
+                    Skip AI — fill out the form manually instead
+                  </button>
+                </div>
               </div>
             </form>
           )}
@@ -418,13 +429,22 @@ export default function OnboardingPage() {
           {step === 2 && (
             <form onSubmit={handleGenerate} className="space-y-6">
 
-              {/* Extraction notice */}
-              <div className="flex items-start gap-3 bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 text-sm text-emerald-800">
-                <svg className="w-5 h-5 shrink-0 mt-0.5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <span>Claude extracted the details below. Review and edit anything that doesn't look right, then generate your sheet.</span>
-              </div>
+              {/* Extraction / manual notice */}
+              {skippedAI ? (
+                <div className="flex items-start gap-3 bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-600">
+                  <svg className="w-5 h-5 shrink-0 mt-0.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                  </svg>
+                  <span>Fill in your study details below, then hit <strong>Generate Sheet</strong> to download your template.</span>
+                </div>
+              ) : (
+                <div className="flex items-start gap-3 bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 text-sm text-emerald-800">
+                  <svg className="w-5 h-5 shrink-0 mt-0.5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span>Claude extracted the details below. Review and edit anything that doesn't look right, then generate your sheet.</span>
+                </div>
+              )}
 
               {/* Study Details */}
               <section className="card">
@@ -652,7 +672,7 @@ export default function OnboardingPage() {
 
               {/* Actions */}
               <div className="flex flex-col-reverse sm:flex-row sm:items-center gap-3">
-                <button type="button" onClick={() => setStep(1)}
+                <button type="button" onClick={() => { setStep(1); setSkippedAI(false); }}
                   className="flex items-center justify-center gap-2 px-4 py-3 sm:py-2.5 text-sm font-medium text-slate-600 border border-slate-200 rounded-xl hover:bg-slate-50 transition w-full sm:w-auto">
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
