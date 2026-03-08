@@ -45,7 +45,7 @@ export default async function handler(req, res) {
   const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toUTCString();
   const studySlug = study || 'default';
   res.setHeader('Set-Cookie', [
-    `active_study=${encodeURIComponent(studySlug)}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
+    `active_study=${encodeURIComponent(studySlug)}; Path=/; HttpOnly; Secure; SameSite=Strict; Expires=${expires}`,
   ]);
 
   return res.status(200).json({

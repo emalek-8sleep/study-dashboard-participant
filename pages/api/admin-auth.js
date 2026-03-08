@@ -24,8 +24,18 @@ export default async function handler(req, res) {
   const studySlug = study || studies[0]?.slug || 'default';
   const sheetId   = getSheetIdBySlug(studySlug);
 
-  const config    = await getStudyConfig(sheetId);
-  const adminCode = (config.admin_code || '').trim();
+  // Prefer env var: ADMIN_CODE_<SLUG> (e.g. ADMIN_CODE_FULL_MOON) or ADMIN_CODE
+  // Falls back to the sheet's admin_code value for backwards compatibility
+  const slugEnvKey = `ADMIN_CODE_${studySlug.toUpperCase().replace(/-/g, '_')}`;
+  const envCode    = (process.env[slugEnvKey] || process.env.ADMIN_CODE || '').trim();
+
+  let adminCode;
+  if (envCode) {
+    adminCode = envCode;
+  } else {
+    const config = await getStudyConfig(sheetId);
+    adminCode    = (config.admin_code || '').trim();
+  }
 
   if (!adminCode) {
     return res.redirect(302, '/admin?error=not_configured');
@@ -41,8 +51,8 @@ export default async function handler(req, res) {
   const sessionCookieName = `admin_session_${studySlug}`;
 
   res.setHeader('Set-Cookie', [
-    `${sessionCookieName}=${encodeURIComponent(code.trim())}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
-    `active_study=${encodeURIComponent(studySlug)}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
+    `${sessionCookieName}=${encodeURIComponent(code.trim())}; Path=/; HttpOnly; Secure; SameSite=Strict; Expires=${expires}`,
+    `active_study=${encodeURIComponent(studySlug)}; Path=/; HttpOnly; Secure; SameSite=Strict; Expires=${expires}`,
   ]);
 
   return res.redirect(302, '/admin');

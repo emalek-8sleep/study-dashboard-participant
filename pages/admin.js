@@ -32,9 +32,21 @@ export async function getServerSideProps({ req, query }) {
   const activeStudy = studies.find((s) => s.slug === activeSlug) || studies[0];
   const sheetId     = activeStudy?.sheetId || '';
 
-  // Load this study's config
-  const config    = sheetId ? await getStudyConfig(sheetId) : {};
-  const adminCode = (config.admin_code || '').trim();
+  // Resolve admin code: prefer env var over sheet value
+  // Env var format: ADMIN_CODE_<SLUG> (e.g. ADMIN_CODE_FULL_MOON) or ADMIN_CODE
+  const slugEnvKey = `ADMIN_CODE_${activeSlug.toUpperCase().replace(/-/g, '_')}`;
+  const envCode    = (process.env[slugEnvKey] || process.env.ADMIN_CODE || '').trim();
+
+  let adminCode;
+  let config = {};
+  if (envCode) {
+    adminCode = envCode;
+    // Still load config for study_name branding, but skip if no sheetId
+    if (sheetId) config = await getStudyConfig(sheetId);
+  } else {
+    config    = sheetId ? await getStudyConfig(sheetId) : {};
+    adminCode = (config.admin_code || '').trim();
+  }
 
   // Check the per-study session cookie: admin_session_<slug>
   const sessionCookieName = `admin_session_${activeSlug}`;
