@@ -17,11 +17,13 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { code, study } = req.body;
+  const { code, study: rawStudy } = req.body;
 
   // Resolve which study to auth against
+  // Guard against array (can happen if two form fields share the same name)
+  const study     = Array.isArray(rawStudy) ? rawStudy[rawStudy.length - 1] : rawStudy;
   const studies   = getStudies();
-  const studySlug = study || studies[0]?.slug || 'default';
+  const studySlug = String(study || studies[0]?.slug || 'default');
   const sheetId   = getSheetIdBySlug(studySlug);
 
   // Prefer env var: ADMIN_CODE_<SLUG> (e.g. ADMIN_CODE_FULL_MOON) or ADMIN_CODE

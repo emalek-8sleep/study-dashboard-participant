@@ -219,8 +219,8 @@ function AdminLogin({ studyName, error, adminCodeConfigured, studies, activeSlug
             )}
 
             <form action="/api/admin-auth" method="POST" className="space-y-4">
-              {/* Hidden study field — always sent */}
-              <input type="hidden" name="study" value={study} />
+              {/* Hidden study field — only used in single-study mode (no select shown) */}
+              {!multiStudy && <input type="hidden" name="study" value={study} />}
 
               {/* Study selector — only shown with multiple studies */}
               {multiStudy && (
