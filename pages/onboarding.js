@@ -93,17 +93,11 @@ export default function OnboardingPage() {
         googleDocsUrl: googleDocsUrl.trim() || undefined,
       };
 
-      // Attach file content by type
-      files.forEach((f) => {
-        if (f.type === 'pdf')  body.pdfBase64  = (body.pdfBase64  ? body.pdfBase64  + '|' : '') + f.base64;
-        if (f.type === 'docx') body.docxBase64 = (body.docxBase64 ? body.docxBase64 + '|' : '') + f.base64;
-      });
-
-      // Only the first file of each type for now (multiple-file support is a nice-to-have)
-      files.forEach((f) => {
-        if (f.type === 'pdf'  && !body.pdfBase64)  body.pdfBase64  = f.base64;
-        if (f.type === 'docx' && !body.docxBase64) body.docxBase64 = f.base64;
-      });
+      // Send files as arrays — never concatenate base64 strings
+      const pdfFiles  = files.filter((f) => f.type === 'pdf').map((f) => f.base64);
+      const docxFiles = files.filter((f) => f.type === 'docx').map((f) => f.base64);
+      if (pdfFiles.length  > 0) body.pdfFiles  = pdfFiles;
+      if (docxFiles.length > 0) body.docxFiles = docxFiles;
 
       const res  = await fetch('/api/extract-study', {
         method:  'POST',

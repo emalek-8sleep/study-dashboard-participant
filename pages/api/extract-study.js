@@ -65,7 +65,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'ANTHROPIC_API_KEY is not configured in environment variables.' });
   }
 
-  const { text, pdfBase64, docxBase64, googleDocsUrl } = req.body;
+  const { text, pdfFiles, docxFiles, googleDocsUrl } = req.body;
 
   try {
     const { default: Anthropic } = await import('@anthropic-ai/sdk');
@@ -74,32 +74,28 @@ export default async function handler(req, res) {
     // Build the message content array
     const contentBlocks = [];
 
-    // 1. PDF — extract text via pdf-parse and send as a text block
-    // (Using text extraction is more reliable than the document/base64 approach
-    //  which can fail with certain SDK versions and payload sizes)
-    if (pdfBase64) {
-      try {
-        const { PDFParse } = await import('pdf-parse');
-        const buffer = Buffer.from(sanitizeBase64(pdfBase64), 'base64');
-        const parser = new PDFParse({ data: buffer });
-        const result = await parser.getText();
-        await parser.destroy();
-        if (result.text && result.text.trim()) {
-          contentBlocks.push({ type: 'text', text: `[PDF Content]\n\n${result.text.trim()}` });
+    // 1. PDFs — send as native Anthropic document blocks (one per file)
+    if (Array.isArray(pdfFiles) && pdfFiles.length > 0) {
+      for (const raw of pdfFiles) {
+        const data = sanitizeBase64(raw);
+        if (data) {
+          contentBlocks.push({
+            type:   'document',
+            source: { type: 'base64', media_type: 'application/pdf', data },
+          });
         }
-      } catch (pdfErr) {
-        console.error('[extract-study] PDF parse error:', pdfErr.message);
-        // Non-fatal — other content blocks (text paste, docx, etc.) can still be used
       }
     }
 
     // 2. DOCX — extract raw text via mammoth
-    if (docxBase64) {
+    if (Array.isArray(docxFiles) && docxFiles.length > 0) {
       const mammoth = await import('mammoth');
-      const buffer  = Buffer.from(docxBase64, 'base64');
-      const { value: docxText } = await mammoth.default.extractRawText({ buffer });
-      if (docxText.trim()) {
-        contentBlocks.push({ type: 'text', text: `[Word Document Content]\n\n${docxText}` });
+      for (const raw of docxFiles) {
+        const buffer = Buffer.from(raw, 'base64');
+        const { value: docxText } = await mammoth.default.extractRawText({ buffer });
+        if (docxText.trim()) {
+          contentBlocks.push({ type: 'text', text: `[Word Document Content]\n\n${docxText}` });
+        }
       }
     }
 
@@ -161,12 +157,12 @@ export default async function handler(req, res) {
  */
 function sanitizeBase64(str) {
   if (!str) return '';
-  // Remove data URL prefix if the caller accidentally included it
+  // Strip data URL prefix (e.g. "data:application/pdf;base64,")
   const raw = str.includes(',') ? str.split(',').pop() : str;
-  // Strip all whitespace (newlines, spaces, tabs)
-  const clean = raw.replace(/\s/g, '');
-  // Re-pad to a valid multiple of 4
-  return clean + '='.repeat((4 - (clean.length % 4)) % 4);
+  // Strip all whitespace, then strip any existing padding before re-padding
+  // (double-padding is invalid — must remove first)
+  const stripped = raw.replace(/\s/g, '').replace(/=+$/, '');
+  return stripped + '='.repeat((4 - (stripped.length % 4)) % 4);
 }
 
 function extractGoogleDocId(url) {
