@@ -9,7 +9,7 @@
  * Step 3: Download the .xlsx template
  */
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import Head from 'next/head';
 
 // ─── Default form state ────────────────────────────────────────────────────────
@@ -55,6 +55,54 @@ export default function OnboardingPage() {
   const [googleDocsUrl, setGoogleDocsUrl] = useState('');
   const [files,         setFiles]         = useState([]); // [{ name, base64, type }]
   const fileInputRef = useRef(null);
+
+  // Progress bar state
+  const [progress,       setProgress]       = useState(0);
+  const [progressLabel,  setProgressLabel]  = useState('');
+  const progressInterval = useRef(null);
+
+  const PROGRESS_LABELS = [
+    'Reading your documents…',
+    'Identifying study structure…',
+    'Extracting phases and timeline…',
+    'Finding daily check-in fields…',
+    'Mapping setup steps…',
+    'Almost there…',
+  ];
+
+  // Animate progress bar while loading — asymptotic approach to 92%
+  useEffect(() => {
+    if (loading) {
+      setProgress(0);
+      setProgressLabel(PROGRESS_LABELS[0]);
+      let current = 0;
+      let labelIdx = 0;
+      progressInterval.current = setInterval(() => {
+        // Slow down as we approach 92% ceiling
+        const increment = (92 - current) * 0.045;
+        current = Math.min(current + increment, 92);
+        setProgress(Math.round(current));
+        // Rotate label roughly every ~15%
+        const newLabelIdx = Math.min(
+          Math.floor(current / 16),
+          PROGRESS_LABELS.length - 1
+        );
+        if (newLabelIdx !== labelIdx) {
+          labelIdx = newLabelIdx;
+          setProgressLabel(PROGRESS_LABELS[newLabelIdx]);
+        }
+      }, 600);
+    } else {
+      clearInterval(progressInterval.current);
+      if (progress > 0) {
+        // Snap to 100% briefly before the next step renders
+        setProgress(100);
+        setProgressLabel('Done!');
+      }
+    }
+    return () => clearInterval(progressInterval.current);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
 
   // ── File handling ──────────────────────────────────────────────────────────
 
@@ -105,7 +153,10 @@ export default function OnboardingPage() {
         body:    JSON.stringify(body),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Extraction failed');
+      if (!res.ok) {
+        const msg = data.hint ? `${data.error} — Response started with: "${data.hint}"` : (data.error || 'Extraction failed');
+        throw new Error(msg);
+      }
 
       // Merge extracted data into formData, keeping defaults for missing fields
       setFormData({
@@ -383,38 +434,46 @@ export default function OnboardingPage() {
                   />
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="btn-primary w-full flex items-center justify-center gap-2"
-                >
-                  {loading ? (
-                    <>
-                      <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
-                      </svg>
-                      Extracting with Claude…
-                    </>
-                  ) : (
-                    <>
+                {loading ? (
+                  /* ── Progress state ── */
+                  <div className="py-2">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium text-slate-700">{progressLabel}</span>
+                      <span className="text-sm font-semibold text-brand-600 tabular-nums">{progress}%</span>
+                    </div>
+                    <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-brand-600 rounded-full transition-all duration-500 ease-out"
+                        style={{ width: `${progress}%` }}
+                      />
+                    </div>
+                    <p className="text-xs text-slate-400 mt-2 text-center">
+                      Claude is reading your documents — this usually takes 15–30 seconds
+                    </p>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="submit"
+                      className="btn-primary w-full flex items-center justify-center gap-2"
+                    >
                       Extract & Review
                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
                       </svg>
-                    </>
-                  )}
-                </button>
+                    </button>
 
-                <div className="text-center mt-4">
-                  <button
-                    type="button"
-                    onClick={() => { setSkippedAI(true); setError(''); setStep(2); }}
-                    className="text-sm text-slate-500 hover:text-slate-700 transition"
-                  >
-                    Skip AI — fill out the form manually instead
-                  </button>
-                </div>
+                    <div className="text-center mt-4">
+                      <button
+                        type="button"
+                        onClick={() => { setSkippedAI(true); setError(''); setStep(2); }}
+                        className="text-sm text-slate-500 hover:text-slate-700 transition"
+                      >
+                        Skip AI — fill out the form manually instead
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </form>
           )}

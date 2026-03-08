@@ -15,10 +15,11 @@ export const config = {
   api: { bodyParser: { sizeLimit: '20mb' } },
 };
 
-const EXTRACTION_PROMPT = `
-Analyze the study documentation provided and extract information to populate a study management spreadsheet.
+// System prompt — Claude follows format constraints much more reliably
+// when they are in the system role rather than appended to user content.
+const SYSTEM_PROMPT = `You are a clinical research data extractor. Your sole job is to read study documents and return a single, raw JSON object — no markdown fences, no explanation, no preamble, nothing else whatsoever. If you output anything other than the JSON object the response will be unusable.
 
-Return ONLY a valid JSON object (no markdown, no explanation) with this exact structure:
+Extract information to populate a study management spreadsheet. Return ONLY this JSON structure:
 
 {
   "studyName": "full name of the study",
@@ -49,14 +50,13 @@ Return ONLY a valid JSON object (no markdown, no explanation) with this exact st
   ]
 }
 
-Guidelines:
-- phases: identify all distinct study periods mentioned (baseline, run-in, washout, intervention, extension, follow-up, etc.). Estimate duration in days from the protocol.
-- checkinFields: identify daily or nightly participant measurements (sleep quality ratings, device usage confirmation, symptom scores, survey responses, etc.). Each field maps to one spreadsheet column.
-- columnName must be clean Title Case with no special characters (e.g. "Sleep Quality Score" not "sleep_quality_score").
-- setupSteps: extract device setup or study enrollment steps if described. Return an empty array if none are mentioned.
-- If information is ambiguous or missing, make a reasonable inference based on context. Use empty string for truly unknown values.
-- Return ONLY the JSON object. No other text before or after it.
-`;
+Rules:
+- phases: all distinct study periods (baseline, run-in, washout, intervention, extension, follow-up, etc.). Estimate durationDays from the protocol.
+- checkinFields: daily/nightly participant measurements (sleep quality, device usage, symptom scores, survey responses). Each field = one spreadsheet column.
+- columnName: clean Title Case, no special characters (e.g. "Sleep Quality Score").
+- setupSteps: device setup or enrollment steps. Empty array if none mentioned.
+- Use empty string for unknown values. Make reasonable inferences for ambiguous info.
+- YOUR ENTIRE RESPONSE MUST BE THE JSON OBJECT AND NOTHING ELSE.`;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
@@ -123,21 +123,30 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'No document content provided.' });
     }
 
-    // Add extraction prompt as final message
-    contentBlocks.push({ type: 'text', text: EXTRACTION_PROMPT });
+    // Add a brief user instruction (the detailed rules are in the system prompt)
+    contentBlocks.push({
+      type: 'text',
+      text: 'Extract the study information from the document(s) above and return the JSON object.',
+    });
 
     const response = await client.messages.create({
       model:      'claude-sonnet-4-6',
       max_tokens: 4096,
+      system:     SYSTEM_PROMPT,
       messages:   [{ role: 'user', content: contentBlocks }],
     });
 
-    // Parse JSON from response — Claude should return only raw JSON per prompt
+    // Parse JSON from response
     const raw  = (response.content[0]?.text || '').trim();
+    console.log('[extract-study] raw response (first 500 chars):', raw.slice(0, 500));
     const json = parseJsonSafely(raw);
 
     if (!json) {
-      return res.status(500).json({ error: 'Could not parse structured data from Claude response.', raw });
+      console.error('[extract-study] failed to parse JSON. Full response:', raw);
+      return res.status(500).json({
+        error: 'Could not parse structured data from Claude response.',
+        hint:  raw.slice(0, 300),
+      });
     }
 
     return res.status(200).json(json);
