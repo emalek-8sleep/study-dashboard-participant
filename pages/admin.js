@@ -175,10 +175,37 @@ export default function AdminPage({
 
 // ─── Login form ───────────────────────────────────────────────────────────────
 
-function AdminLogin({ studyName, error, adminCodeConfigured, studies, activeSlug }) {
-  const [code, setCode]     = useState('');
-  const [study, setStudy]   = useState(activeSlug || studies[0]?.slug || '');
-  const multiStudy          = studies.length > 1;
+function AdminLogin({ studyName, adminCodeConfigured, studies, activeSlug }) {
+  const [code, setCode]         = useState('');
+  const [study, setStudy]       = useState(activeSlug || studies[0]?.slug || '');
+  const [loading, setLoading]   = useState(false);
+  const [loginError, setLoginError] = useState('');
+  const multiStudy              = studies.length > 1;
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!code.trim()) return;
+    setLoading(true);
+    setLoginError('');
+    try {
+      const body = new URLSearchParams({ code: code.trim(), study });
+      const res  = await fetch('/api/admin-auth', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body:    body.toString(),
+      });
+      // API redirects to /admin on success, /admin?error=invalid on failure
+      if (res.url && res.url.includes('error=')) {
+        setLoginError('Incorrect code — please try again.');
+        setLoading(false);
+      } else {
+        window.location.href = '/admin';
+      }
+    } catch {
+      setLoginError('Something went wrong. Please try again.');
+      setLoading(false);
+    }
+  }
 
   return (
     <>
@@ -212,16 +239,13 @@ function AdminLogin({ studyName, error, adminCodeConfigured, studies, activeSlug
               </div>
             )}
 
-            {error === 'invalid' && (
+            {loginError && (
               <div className="bg-red-50 border border-red-100 rounded-xl px-4 py-3 text-sm text-red-700 mb-4">
-                Incorrect code — please try again.
+                {loginError}
               </div>
             )}
 
-            <form action="/api/admin-auth" method="POST" className="space-y-4">
-              {/* Hidden study field — only used in single-study mode (no select shown) */}
-              {!multiStudy && <input type="hidden" name="study" value={study} />}
-
+            <form onSubmit={handleSubmit} className="space-y-4">
               {/* Study selector — only shown with multiple studies */}
               {multiStudy && (
                 <div>
@@ -231,7 +255,6 @@ function AdminLogin({ studyName, error, adminCodeConfigured, studies, activeSlug
                   <div className="relative">
                     <select
                       id="studySelect"
-                      name="study"
                       value={study}
                       onChange={(e) => setStudy(e.target.value)}
                       className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-slate-500 text-slate-800 text-sm transition appearance-none bg-white pr-10"
@@ -255,20 +278,19 @@ function AdminLogin({ studyName, error, adminCodeConfigured, studies, activeSlug
                 </label>
                 <input
                   id="code"
-                  name="code"
                   type="password"
                   value={code}
-                  onChange={(e) => setCode(e.target.value)}
+                  onChange={(e) => { setCode(e.target.value); setLoginError(''); }}
                   placeholder="Enter your admin code"
                   className="w-full px-4 py-3 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-slate-500 text-slate-800 text-sm transition"
                 />
               </div>
               <button
                 type="submit"
-                disabled={!code.trim()}
+                disabled={loading || !code.trim()}
                 className="w-full py-3 px-4 bg-slate-800 hover:bg-slate-900 text-white text-sm font-semibold rounded-xl transition disabled:opacity-40"
               >
-                Access Dashboard
+                {loading ? 'Verifying…' : 'Access Dashboard'}
               </button>
             </form>
           </div>
