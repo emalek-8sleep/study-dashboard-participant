@@ -79,12 +79,13 @@ export default async function handler(req, res) {
     //  which can fail with certain SDK versions and payload sizes)
     if (pdfBase64) {
       try {
-        // Use the direct lib path to avoid pdf-parse's test-file auto-load in serverless
-        const pdfParse = (await import('pdf-parse/lib/pdf-parse.js')).default;
-        const buffer   = Buffer.from(sanitizeBase64(pdfBase64), 'base64');
-        const { text } = await pdfParse(buffer);
-        if (text.trim()) {
-          contentBlocks.push({ type: 'text', text: `[PDF Content]\n\n${text.trim()}` });
+        const { PDFParse } = await import('pdf-parse');
+        const buffer = Buffer.from(sanitizeBase64(pdfBase64), 'base64');
+        const parser = new PDFParse({ data: buffer });
+        const result = await parser.getText();
+        await parser.destroy();
+        if (result.text && result.text.trim()) {
+          contentBlocks.push({ type: 'text', text: `[PDF Content]\n\n${result.text.trim()}` });
         }
       } catch (pdfErr) {
         console.error('[extract-study] PDF parse error:', pdfErr.message);
