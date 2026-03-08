@@ -74,14 +74,21 @@ export default async function handler(req, res) {
     // Build the message content array
     const contentBlocks = [];
 
-    // 1. Native PDF support — Claude reads it directly as a document block
+    // 1. PDF — extract text via pdf-parse and send as a text block
+    // (Using text extraction is more reliable than the document/base64 approach
+    //  which can fail with certain SDK versions and payload sizes)
     if (pdfBase64) {
-      const cleanPdf = sanitizeBase64(pdfBase64);
-      if (cleanPdf) {
-        contentBlocks.push({
-          type: 'document',
-          source: { type: 'base64', media_type: 'application/pdf', data: cleanPdf },
-        });
+      try {
+        // Use the direct lib path to avoid pdf-parse's test-file auto-load in serverless
+        const pdfParse = (await import('pdf-parse/lib/pdf-parse.js')).default;
+        const buffer   = Buffer.from(sanitizeBase64(pdfBase64), 'base64');
+        const { text } = await pdfParse(buffer);
+        if (text.trim()) {
+          contentBlocks.push({ type: 'text', text: `[PDF Content]\n\n${text.trim()}` });
+        }
+      } catch (pdfErr) {
+        console.error('[extract-study] PDF parse error:', pdfErr.message);
+        // Non-fatal — other content blocks (text paste, docx, etc.) can still be used
       }
     }
 
