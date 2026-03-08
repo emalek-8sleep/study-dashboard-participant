@@ -76,10 +76,13 @@ export default async function handler(req, res) {
 
     // 1. Native PDF support — Claude reads it directly as a document block
     if (pdfBase64) {
-      contentBlocks.push({
-        type: 'document',
-        source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 },
-      });
+      const cleanPdf = sanitizeBase64(pdfBase64);
+      if (cleanPdf) {
+        contentBlocks.push({
+          type: 'document',
+          source: { type: 'base64', media_type: 'application/pdf', data: cleanPdf },
+        });
+      }
     }
 
     // 2. DOCX — extract raw text via mammoth
@@ -142,6 +145,21 @@ export default async function handler(req, res) {
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+/**
+ * Strip whitespace and any accidental data-URL prefix from a base64 string,
+ * then re-pad to a valid multiple of 4. Browsers occasionally include
+ * line breaks or the full "data:...;base64," prefix in FileReader output.
+ */
+function sanitizeBase64(str) {
+  if (!str) return '';
+  // Remove data URL prefix if the caller accidentally included it
+  const raw = str.includes(',') ? str.split(',').pop() : str;
+  // Strip all whitespace (newlines, spaces, tabs)
+  const clean = raw.replace(/\s/g, '');
+  // Re-pad to a valid multiple of 4
+  return clean + '='.repeat((4 - (clean.length % 4)) % 4);
+}
 
 function extractGoogleDocId(url) {
   // Matches /document/d/{ID}/ or /document/d/{ID}?
