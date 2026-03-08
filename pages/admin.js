@@ -460,6 +460,62 @@ function AdminDashboard({ studyName, summaries, stats, studies, activeSlug }) {
             </div>
           </div>
 
+          {/* ── Sheet Settings Reference ── */}
+          <div className="mt-8 bg-white rounded-2xl border border-slate-100 overflow-hidden">
+            <div className="px-6 py-4 border-b border-slate-100">
+              <h2 className="text-sm font-bold text-slate-800">Dashboard Settings</h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Control these features by adding rows to the <strong>Study Config</strong> tab in your Google Sheet.
+              </p>
+            </div>
+            <div className="divide-y divide-slate-50">
+              {[
+                {
+                  key:     'show_tonight',
+                  values:  'true / false',
+                  default: 'true',
+                  label:   'Tonight Card',
+                  desc:    "Shows participants what phase/night they're on tonight and what to do. Set to false to hide.",
+                },
+                {
+                  key:     'show_full_history',
+                  values:  'true / false',
+                  default: 'false',
+                  label:   'Full History View',
+                  desc:    'When true, all previous nights are expanded by default on the dashboard instead of collapsed behind a toggle.',
+                },
+              ].map(({ key, values, default: def, label, desc }) => (
+                <div key={key} className="px-6 py-4 flex items-start gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-bold text-slate-700">{label}</span>
+                      <code className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">{key}</code>
+                    </div>
+                    <p className="text-xs text-slate-500">{desc}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <div className="text-xs text-slate-400">Values: <span className="text-slate-600 font-medium">{values}</span></div>
+                    <div className="text-xs text-slate-400 mt-0.5">Default: <span className="text-slate-600 font-medium">{def}</span></div>
+                  </div>
+                </div>
+              ))}
+              <div className="px-6 py-4 flex items-start gap-4 bg-slate-50/60">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xs font-bold text-slate-700">Break Nights</span>
+                    <code className="text-xs bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded font-mono">Break Nights</code>
+                    <span className="text-xs bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-semibold">Participants tab</span>
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    Add a <strong>Break Nights</strong> column to the Participants tab. Enter comma-separated dates for nights off{' '}
+                    <span className="font-mono text-slate-600">(e.g. 2025-03-10, 2025-03-17)</span>.{' '}
+                    Those nights show as "Break night" in history and the Tonight card reflects it.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </main>
       </div>
     </>

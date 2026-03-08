@@ -2,6 +2,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import ProgressTracker   from '../../components/ProgressTracker';
 import DailyStatusCard   from '../../components/DailyStatusCard';
+import TonightCard       from '../../components/TonightCard';
 import CommentsSection   from '../../components/CommentsSection';
 import ShippingCard      from '../../components/ShippingCard';
 import Navbar            from '../../components/Navbar';
@@ -38,6 +39,31 @@ export async function getServerSideProps({ params, req }) {
   // Build URLs here (server-side) since buildParticipantUrl isn't available client-side
   const hstUploadLink = buildParticipantUrl(config.hst_upload_link || '', subjectId);
 
+  // ── Tonight's instructions ──────────────────────────────────────────────────
+  const currentPhase = progress.find((p) => p.status === 'inprogress') || progress.find((p) => p.status === 'pending');
+  const tonightDay   = currentPhase?.days?.find((d) => d.status === 'inprogress') || currentPhase?.days?.find((d) => d.status === 'pending');
+  const tonightInfo  = (currentPhase && tonightDay) ? {
+    phaseName:        currentPhase.phaseName,
+    phaseDescription: currentPhase.description || '',
+    phaseGoal:        currentPhase.goal         || '',
+    dayNumber:        tonightDay.dayNumber,
+    dayLabel:         tonightDay.dayLabel        || '',
+    completedDays:    currentPhase.completedDays,
+    totalDays:        currentPhase.totalDays,
+  } : null;
+
+  // ── Break nights ────────────────────────────────────────────────────────────
+  // "Break Nights" column in Participants tab — comma-separated dates (YYYY-MM-DD)
+  const breakNightsRaw = participant['Break Nights'] || participant['break_nights'] || '';
+  const breakNights    = breakNightsRaw.split(',').map((d) => d.trim()).filter(Boolean);
+  const todayStr       = new Date().toISOString().split('T')[0];
+  const isBreakNight   = breakNights.includes(todayStr);
+
+  // ── Sheet-driven settings ───────────────────────────────────────────────────
+  // Set in Study Config tab:  show_full_history | true   and   show_tonight | false
+  const showFullHistory = (config.show_full_history || '').toLowerCase() === 'true';
+  const showTonight     = (config.show_tonight || 'true').toLowerCase() !== 'false';
+
   return {
     props: {
       participant,
@@ -49,6 +75,11 @@ export async function getServerSideProps({ params, req }) {
       shipments,
       subjectId,
       hstUploadLink,
+      tonightInfo,
+      breakNights,
+      isBreakNight,
+      showFullHistory,
+      showTonight,
     },
   };
 }
@@ -63,6 +94,11 @@ export default function DashboardPage({
   shipments,
   subjectId,
   hstUploadLink,
+  tonightInfo,
+  breakNights,
+  isBreakNight,
+  showFullHistory,
+  showTonight,
 }) {
   const studyName    = config.study_name        || 'Study Participant Dashboard';
   const contactEmail = config.contact_email     || '';
@@ -212,6 +248,15 @@ export default function DashboardPage({
           {/* ── Shipping status ── */}
           <ShippingCard shipments={shipments} />
 
+          {/* ── Tonight's instructions ── */}
+          {showTonight && (tonightInfo || isBreakNight) && (
+            <section id="tonight">
+              <h2 className="section-title">Tonight</h2>
+              <p className="section-subtitle">What's on for tonight based on your current phase.</p>
+              <TonightCard tonightInfo={tonightInfo} isBreakNight={isBreakNight} />
+            </section>
+          )}
+
           {/* ── Daily status + HST upload ── */}
           <section id="daily-status">
             <h2 className="section-title">Today's Actions</h2>
@@ -222,6 +267,8 @@ export default function DashboardPage({
               checkinFields={checkinFields}
               config={config}
               hstUploadLink={hstUploadLink}
+              showFullHistory={showFullHistory}
+              breakNights={breakNights}
             />
           </section>
 
