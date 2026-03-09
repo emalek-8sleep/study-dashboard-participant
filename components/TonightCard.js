@@ -12,7 +12,13 @@
  *   show_tonight | true   ← set to "false" to hide this card entirely
  */
 
+function todayLabel() {
+  return new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+}
+
 export default function TonightCard({ tonightInfo, isBreakNight }) {
+  const dateStr = todayLabel();
+
   // Break night takes priority
   if (isBreakNight) {
     return (
@@ -25,7 +31,10 @@ export default function TonightCard({ tonightInfo, isBreakNight }) {
             </svg>
           </div>
           <div>
-            <h3 className="text-base font-bold text-slate-800">Tonight — Break Night</h3>
+            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-0.5">
+              Tonight · {dateStr}
+            </p>
+            <h3 className="text-base font-bold text-slate-800">Break Night</h3>
             <p className="text-sm text-slate-500 mt-1">
               You have a scheduled break tonight. No data collection is required — enjoy the night off!
             </p>
@@ -63,7 +72,7 @@ export default function TonightCard({ tonightInfo, isBreakNight }) {
             </svg>
           </div>
           <div>
-            <p className="text-xs font-semibold text-brand-500 uppercase tracking-wide mb-0.5">Tonight</p>
+            <p className="text-xs font-semibold text-brand-500 uppercase tracking-wide mb-0.5">Tonight · {dateStr}</p>
             <h3 className="text-base font-bold text-slate-800">
               {phaseName}{displayDay ? ` · ${displayDay}` : ''}
             </h3>

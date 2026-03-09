@@ -225,10 +225,17 @@ export default function DailyStatusCard({ todayStatus, history, checkinFields, c
       {/* Header */}
       <div className="flex items-start justify-between gap-4 mb-4">
         <div>
-          <h3 className="section-title mb-0">Last Night's Check-In</h3>
-          <p className="text-xs text-slate-400 mt-0.5">
-            {hasToday ? `Data for ${formatDate(todayStatus['Date'])}` : 'No data recorded yet for today'}
-          </p>
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <h3 className="section-title mb-0">Last Night's Check-In</h3>
+            {hasToday && (
+              <span className="text-sm font-semibold text-slate-500">
+                {formatDate(todayStatus['Date'], true)}
+              </span>
+            )}
+          </div>
+          {!hasToday && (
+            <p className="text-xs text-slate-400 mt-0.5">No data recorded yet</p>
+          )}
         </div>
         {hasToday && actionCount > 0 && (
           <span className="badge bg-amber-100 text-amber-700 shrink-0">

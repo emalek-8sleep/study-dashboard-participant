@@ -1,5 +1,34 @@
 import Head from 'next/head';
 import Link from 'next/link';
+import { useState, useEffect } from 'react';
+
+// Live clock — re-renders every minute, shows e.g. "Monday, March 9 · 3:42 PM"
+function LiveDateTime() {
+  const [display, setDisplay] = useState('');
+
+  useEffect(() => {
+    function format() {
+      const now = new Date();
+      const date = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+      const time = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      return `${date} · ${time}`;
+    }
+    setDisplay(format());
+    const id = setInterval(() => setDisplay(format()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!display) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-100 bg-white/10 px-2.5 py-1 rounded-full">
+      <svg className="w-3 h-3 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+          d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+      </svg>
+      {display}
+    </span>
+  );
+}
 import ProgressTracker   from '../../components/ProgressTracker';
 import DailyStatusCard   from '../../components/DailyStatusCard';
 import TonightCard       from '../../components/TonightCard';
@@ -191,6 +220,7 @@ export default function DashboardPage({
                 <p className="text-brand-200 text-sm font-medium mb-1">{greeting}</p>
                 <h1 className="text-2xl font-bold">{firstName}</h1>
                 <p className="text-brand-100 text-sm mt-1">Subject ID: {subjectId}</p>
+                <div className="mt-2"><LiveDateTime /></div>
               </div>
 
               {totalDays > 0 && (
