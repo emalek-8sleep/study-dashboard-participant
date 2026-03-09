@@ -36,8 +36,11 @@ export default async function handler(req, res) {
 
     if (!participant) return res.status(200).json({ hasPin: false });
 
-    // Pad to 4 digits in case Sheets stored a leading-zero PIN as a number (e.g. 0000 → 0)
-    const pin = (participant['PIN'] || '').toString().trim().padStart(4, '0');
+    // Pad to 4 digits only if a PIN was actually stored — handles Sheets collapsing
+    // leading-zero PINs (e.g. 0000 → stored as number 0 → string '0').
+    // An empty cell must stay empty so hasPin comes back false for new participants.
+    const rawPin = (participant['PIN'] || '').toString().trim();
+    const pin    = rawPin ? rawPin.padStart(4, '0') : '';
     return res.status(200).json({ hasPin: pin.length === 4 && /^\d{4}$/.test(pin) });
   }
 
@@ -90,8 +93,9 @@ export default async function handler(req, res) {
         });
       }
 
-      // Pad stored PIN in case Sheets collapsed leading zeros (0000 → 0)
-      const storedPin = (participant['PIN'] || '').toString().trim().padStart(4, '0');
+      // Pad stored PIN only if a value exists — same logic as the hasPin check above
+      const rawStored = (participant['PIN'] || '').toString().trim();
+      const storedPin = rawStored ? rawStored.padStart(4, '0') : '';
       if (storedPin !== pin) {
         // Record failed attempt
         const attempts = (failData.attempts || 0) + 1;
