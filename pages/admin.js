@@ -22,6 +22,7 @@ export async function getServerSideProps({ req, query }) {
   const {
     getStudyConfig, getAllParticipants, getAllDailyStatuses,
     getAllComments, getPhases, getCheckinFields, deriveProgress,
+    getAllMetrics, buildMetricsSummary,
   } = await import('../lib/sheets');
 
   const studies = getStudies();
@@ -67,12 +68,14 @@ export async function getServerSideProps({ req, query }) {
   }
 
   // Fetch all data for this study in parallel
-  const [participants, allStatuses, allComments, phases, checkinFields] = await Promise.all([
+  const metricsTabName = config.metrics_tab_name || 'Metrics';
+  const [participants, allStatuses, allComments, phases, checkinFields, metrics] = await Promise.all([
     getAllParticipants(sheetId),
     getAllDailyStatuses(sheetId),
     getAllComments(sheetId),
     getPhases(sheetId),
     getCheckinFields(sheetId),
+    getAllMetrics(sheetId, metricsTabName),
   ]);
 
   // Build per-participant summary
@@ -163,12 +166,16 @@ export async function getServerSideProps({ req, query }) {
     fieldStats,
   };
 
+  const metricsSummary = buildMetricsSummary(metrics);
+
   return {
     props: {
       authenticated: true,
       studyName:     config.study_short_name || config.study_name || activeStudy?.name || 'Study Dashboard',
       summaries,
       stats,
+      metrics,
+      metricsSummary,
       studies,
       activeSlug,
     },
@@ -179,7 +186,7 @@ export async function getServerSideProps({ req, query }) {
 
 export default function AdminPage({
   authenticated, studyName, error, adminCodeConfigured,
-  summaries, stats, studies, activeSlug,
+  summaries, stats, metrics, metricsSummary, studies, activeSlug,
 }) {
   if (!authenticated) {
     return (
@@ -197,6 +204,8 @@ export default function AdminPage({
       studyName={studyName}
       summaries={summaries}
       stats={stats}
+      metrics={metrics || []}
+      metricsSummary={metricsSummary || {}}
       studies={studies}
       activeSlug={activeSlug}
     />
@@ -332,10 +341,11 @@ function AdminLogin({ studyName, adminCodeConfigured, studies, activeSlug }) {
 
 // ─── Main admin dashboard ──────────────────────────────────────────────────────
 
-function AdminDashboard({ studyName, summaries, stats, studies, activeSlug }) {
-  const [search, setSearch] = useState('');
-  const [filter, setFilter] = useState('all');
-  const multiStudy          = studies.length > 1;
+function AdminDashboard({ studyName, summaries, stats, metrics, metricsSummary, studies, activeSlug }) {
+  const [search,     setSearch]     = useState('');
+  const [filter,     setFilter]     = useState('all');
+  const [activeTab,  setActiveTab]  = useState('overview');
+  const multiStudy                  = studies.length > 1;
 
   const filtered = summaries.filter((s) => {
     const matchSearch = !search || (
@@ -408,7 +418,40 @@ function AdminDashboard({ studyName, summaries, stats, studies, activeSlug }) {
           </div>
         </header>
 
-        <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-6">
+        <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 space-y-6">
+
+          {/* ── Tab navigation ── */}
+          <div className="flex items-center gap-1 border-b border-slate-200">
+            {[
+              { key: 'overview', label: 'Overview' },
+              { key: 'data',     label: `Data${metrics.length > 0 ? ` (${metrics.length})` : ''}` },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition -mb-px ${
+                  activeTab === tab.key
+                    ? 'border-brand-600 text-brand-600'
+                    : 'border-transparent text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+
+          {/* ── DATA TAB ── */}
+          {activeTab === 'data' && (
+            <MetricsView
+              metrics={metrics}
+              metricsSummary={metricsSummary}
+              stats={stats}
+              activeSlug={activeSlug}
+            />
+          )}
+
+          {/* ── OVERVIEW TAB ── */}
+          {activeTab === 'overview' && <>
 
           {/* ── Stats cards ── */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-4">
@@ -476,7 +519,7 @@ function AdminDashboard({ studyName, summaries, stats, studies, activeSlug }) {
           </div>
 
           {/* ── Claude study status chat ── */}
-          <AdminChat stats={stats} activeSlug={activeSlug} />
+          <AdminChat stats={stats} metrics={metrics} activeSlug={activeSlug} />
 
           {/* ── Filters & search ── */}
           <div className="flex flex-col sm:flex-row gap-3">
@@ -551,7 +594,7 @@ function AdminDashboard({ studyName, summaries, stats, studies, activeSlug }) {
           </div>
 
           {/* ── Sheet Settings Reference ── */}
-          <div className="mt-8 bg-white rounded-2xl border border-slate-100 overflow-hidden">
+          <div className="mt-2 bg-white rounded-2xl border border-slate-100 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100">
               <h2 className="text-sm font-bold text-slate-800">Dashboard Settings</h2>
               <p className="text-xs text-slate-400 mt-0.5">
@@ -573,6 +616,13 @@ function AdminDashboard({ studyName, summaries, stats, studies, activeSlug }) {
                   default: 'false',
                   label:   'Full History View',
                   desc:    'When true, all previous nights are expanded by default on the dashboard instead of collapsed behind a toggle.',
+                },
+                {
+                  key:     'metrics_tab_name',
+                  values:  'Any tab name',
+                  default: 'Metrics',
+                  label:   'Metrics Tab Name',
+                  desc:    'The name of the Google Sheet tab containing backend metrics. Required columns: Subject ID, Date. All other columns are study-specific (e.g. AHI, Vibration). Coordinators paste data here; the admin Data tab reads it automatically.',
                 },
               ].map(({ key, values, default: def, label, desc }) => (
                 <div key={key} className="px-6 py-4 flex items-start gap-4">
@@ -606,6 +656,8 @@ function AdminDashboard({ studyName, summaries, stats, studies, activeSlug }) {
             </div>
           </div>
 
+          </> /* end overview tab */}
+
         </main>
       </div>
     </>
@@ -614,11 +666,11 @@ function AdminDashboard({ studyName, summaries, stats, studies, activeSlug }) {
 
 // ─── AdminChat ────────────────────────────────────────────────────────────────
 
-function AdminChat({ stats, activeSlug }) {
+function AdminChat({ stats, metrics, activeSlug }) {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
-      content: "Hey! I can help you pull together a study status update or answer questions about last night's data. What would you like to know?",
+      content: "Hey! I can help you pull together a study status update or dig into your metrics data. What would you like to know?",
     },
   ]);
   const [input,   setInput]   = useState('');
@@ -643,7 +695,7 @@ function AdminChat({ stats, activeSlug }) {
       const res  = await fetch('/api/admin/chat', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ messages: next, stats, study: activeSlug }),
+        body:    JSON.stringify({ messages: next, stats, study: activeSlug, metrics: metrics || [] }),
       });
       const data = await res.json();
       setMessages(prev => [...prev, { role: 'assistant', content: data.reply || 'Sorry, something went wrong.' }]);
@@ -658,11 +710,12 @@ function AdminChat({ stats, activeSlug }) {
     setInput(text);
   }
 
+  const hasMetrics = metrics && metrics.length > 0;
   const suggestions = [
     'Generate a study status update for last night',
     'Which participants had issues?',
-    'How many people are in each phase?',
-    'Summarize last night\'s check-in results',
+    ...(hasMetrics ? ['Summarize the metrics data', 'Who has the highest values across all metrics?'] : []),
+    ...(!hasMetrics ? ['How many people are in each phase?', "Summarize last night's check-in results"] : []),
   ];
 
   return (
@@ -737,6 +790,203 @@ function AdminChat({ stats, activeSlug }) {
           Send
         </button>
       </form>
+    </div>
+  );
+}
+
+// ─── MetricsView ─────────────────────────────────────────────────────────────
+
+function MetricsView({ metrics, metricsSummary, stats, activeSlug }) {
+  const [filterPid, setFilterPid] = useState('');
+  const [sortBy,    setSortBy]    = useState('date');
+
+  const metricCols = metrics.length > 0
+    ? Object.keys(metrics[0]).filter((k) => k !== 'Subject ID' && k !== 'Date')
+    : [];
+
+  const filtered = metrics.filter((m) =>
+    !filterPid || (m['Subject ID'] || '').toLowerCase().includes(filterPid.toLowerCase())
+  );
+
+  const sorted = [...filtered].sort((a, b) => {
+    if (sortBy === 'date')    return new Date(b['Date']) - new Date(a['Date']);
+    if (sortBy === 'subject') return (a['Subject ID'] || '').localeCompare(b['Subject ID'] || '');
+    // Sort by metric column (highest first)
+    return (parseFloat(b[sortBy]) || 0) - (parseFloat(a[sortBy]) || 0);
+  });
+
+  // Most-recent reading per participant
+  const latestByPid = {};
+  metrics.forEach((m) => {
+    const pid = m['Subject ID'];
+    if (!latestByPid[pid] || new Date(m['Date']) > new Date(latestByPid[pid]['Date'])) {
+      latestByPid[pid] = m;
+    }
+  });
+  const participantCount = Object.keys(latestByPid).length;
+
+  if (metrics.length === 0) {
+    return (
+      <div className="space-y-4">
+        <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center">
+          <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-4">
+            <svg className="w-6 h-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+          </div>
+          <h3 className="text-sm font-semibold text-slate-700 mb-1">No metrics data yet</h3>
+          <p className="text-xs text-slate-400 max-w-sm mx-auto">
+            Add a <strong>Metrics</strong> tab to your Google Sheet with columns: <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">Subject ID</code>, <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">Date</code>, and any study-specific metrics (e.g. AHI, Vibration, SpO2 Min). Then paste your data and refresh.
+          </p>
+          <p className="text-xs text-slate-400 mt-2">
+            You can customize the tab name in Study Config: <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">metrics_tab_name</code>
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+
+      {/* Summary header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h2 className="text-sm font-bold text-slate-800">Metrics Data</h2>
+          <p className="text-xs text-slate-400 mt-0.5">
+            {metrics.length} reading{metrics.length !== 1 ? 's' : ''} across {participantCount} participant{participantCount !== 1 ? 's' : ''} · {metricCols.length} metric{metricCols.length !== 1 ? 's' : ''}
+          </p>
+        </div>
+      </div>
+
+      {/* Aggregate stat cards */}
+      {metricCols.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {metricCols.map((col) => {
+            const stat = metricsSummary[col];
+            return (
+              <div key={col} className="bg-white rounded-2xl border border-slate-100 p-4">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 truncate">{col}</p>
+                {stat ? (
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-400">Avg</span>
+                      <span className="font-bold text-slate-800 font-mono">{stat.avg}</span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-400">Min</span>
+                      <span className="font-semibold text-emerald-600 font-mono">{stat.min}</span>
+                    </div>
+                    <div className="flex justify-between text-xs">
+                      <span className="text-slate-400">Max</span>
+                      <span className="font-semibold text-red-500 font-mono">{stat.max}</span>
+                    </div>
+                    <div className="flex justify-between text-xs pt-1 border-t border-slate-50">
+                      <span className="text-slate-400">n</span>
+                      <span className="text-slate-500 font-mono">{stat.count}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-300 italic">Non-numeric</p>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Filters */}
+      <div className="flex flex-col sm:flex-row gap-3">
+        <input
+          type="text"
+          placeholder="Filter by Subject ID…"
+          value={filterPid}
+          onChange={(e) => setFilterPid(e.target.value)}
+          className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+        />
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value)}
+          className="px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+        >
+          <option value="date">Newest first</option>
+          <option value="subject">Subject ID</option>
+          {metricCols.map((col) => (
+            <option key={col} value={col}>Highest {col}</option>
+          ))}
+        </select>
+      </div>
+
+      {/* Data table */}
+      <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
+        <div className="overflow-x-auto">
+          {/* Header */}
+          <div
+            className="grid gap-4 px-5 py-3 bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-500 uppercase tracking-wide"
+            style={{ gridTemplateColumns: `140px 110px ${metricCols.map(() => '100px').join(' ')}` }}
+          >
+            <span>Subject ID</span>
+            <span>Date</span>
+            {metricCols.map((col) => (
+              <span key={col} className="text-right truncate">{col}</span>
+            ))}
+          </div>
+
+          {sorted.length === 0 ? (
+            <div className="text-center py-10 text-slate-400 text-sm">
+              No rows match your filter.
+            </div>
+          ) : (
+            <div className="divide-y divide-slate-50">
+              {sorted.map((row, idx) => {
+                const dateStr = row['Date']
+                  ? (() => { try { return new Date(row['Date']).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' }); } catch { return row['Date']; } })()
+                  : '—';
+
+                return (
+                  <div
+                    key={idx}
+                    className="grid gap-4 px-5 py-3.5 hover:bg-slate-50 transition items-center"
+                    style={{ gridTemplateColumns: `140px 110px ${metricCols.map(() => '100px').join(' ')}` }}
+                  >
+                    <a
+                      href={`/dashboard/${encodeURIComponent(row['Subject ID'])}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm font-semibold text-brand-600 hover:text-brand-700 hover:underline truncate"
+                    >
+                      {row['Subject ID']}
+                    </a>
+                    <span className="text-xs text-slate-500">{dateStr}</span>
+                    {metricCols.map((col) => {
+                      const val = row[col];
+                      const num = parseFloat(val);
+                      const stat = metricsSummary[col];
+                      // Highlight values at extremes
+                      let colorClass = 'text-slate-700';
+                      if (stat && !isNaN(num)) {
+                        const range = stat.max - stat.min;
+                        if (range > 0) {
+                          const pct = (num - stat.min) / range;
+                          if (pct >= 0.85) colorClass = 'text-red-600 font-semibold';
+                          else if (pct <= 0.15) colorClass = 'text-emerald-600';
+                        }
+                      }
+                      return (
+                        <span key={col} className={`text-right text-sm font-mono ${val ? colorClass : 'text-slate-300'}`}>
+                          {val || '—'}
+                        </span>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
     </div>
   );
 }

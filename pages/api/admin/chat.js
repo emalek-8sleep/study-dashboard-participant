@@ -17,7 +17,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { messages = [], stats = {}, study = '' } = req.body || {};
+  const { messages = [], stats = {}, study = '', metrics = [] } = req.body || {};
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
@@ -53,11 +53,77 @@ export default async function handler(req, res) {
     });
   }
 
+  // ── Metrics context ───────────────────────────────────────────────────────
+  if (metrics.length > 0) {
+    // Discover metric columns (everything except Subject ID and Date)
+    const metricCols = Object.keys(metrics[0]).filter(
+      (k) => k !== 'Subject ID' && k !== 'Date'
+    );
+
+    // Aggregate stats per column
+    const aggStats = {};
+    metricCols.forEach((col) => {
+      const vals = metrics.map((m) => parseFloat(m[col])).filter((v) => !isNaN(v));
+      if (vals.length) {
+        const sum = vals.reduce((a, b) => a + b, 0);
+        aggStats[col] = {
+          min: Math.min(...vals),
+          max: Math.max(...vals),
+          avg: +(sum / vals.length).toFixed(2),
+          n:   vals.length,
+        };
+      }
+    });
+
+    // Most recent reading per participant
+    const latestByPid = {};
+    metrics.forEach((m) => {
+      const pid = m['Subject ID'];
+      if (!latestByPid[pid] || new Date(m['Date']) > new Date(latestByPid[pid]['Date'])) {
+        latestByPid[pid] = m;
+      }
+    });
+
+    lines.push(``, `BACKEND METRICS DATA:`);
+    lines.push(`  Metrics available: ${metricCols.join(', ')}`);
+    lines.push(`  Total readings: ${metrics.length} across ${Object.keys(latestByPid).length} participants`);
+
+    if (metricCols.length > 0) {
+      lines.push(``, `  AGGREGATE STATS (all readings):`);
+      metricCols.forEach((col) => {
+        const s = aggStats[col];
+        if (s) lines.push(`    ${col}: avg=${s.avg}, min=${s.min}, max=${s.max}, n=${s.n}`);
+        else   lines.push(`    ${col}: (non-numeric)`);
+      });
+    }
+
+    // Latest reading per participant — cap at 40 to avoid token bloat
+    const pids = Object.keys(latestByPid);
+    lines.push(``, `  LATEST READING PER PARTICIPANT (${Math.min(pids.length, 40)} of ${pids.length}):`);
+    pids.slice(0, 40).forEach((pid) => {
+      const row = latestByPid[pid];
+      const dateStr = row['Date'] ? row['Date'].toString().split('T')[0] : '?';
+      const vals = metricCols.map((col) => `${col}=${row[col] ?? '—'}`).join(', ');
+      lines.push(`    ${pid} (${dateStr}): ${vals}`);
+    });
+
+    // Full history for studies with fewer rows — include all if <= 100 rows
+    if (metrics.length <= 100 && metrics.length > Object.keys(latestByPid).length) {
+      lines.push(``, `  FULL HISTORY (all ${metrics.length} readings):`);
+      metrics.forEach((row) => {
+        const dateStr = row['Date'] ? row['Date'].toString().split('T')[0] : '?';
+        const vals = metricCols.map((col) => `${col}=${row[col] ?? '—'}`).join(', ');
+        lines.push(`    ${row['Subject ID']} (${dateStr}): ${vals}`);
+      });
+    }
+  }
+
   lines.push(
     ``,
     `Use this data to answer the coordinator's questions accurately and concisely.`,
-    `When generating a status update, use a clear, professional tone suitable for`,
-    `sharing with the research team. Keep responses focused and practical.`
+    `When asked about metrics, reason over the data provided and highlight anything`,
+    `that looks unusual or worth attention. Use a clear, professional tone suitable`,
+    `for sharing with the research team. Keep responses focused and practical.`
   );
 
   const systemPrompt = lines.join('\n');
