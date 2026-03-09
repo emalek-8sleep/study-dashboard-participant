@@ -129,7 +129,7 @@ export default function DashboardPage({
   showFullHistory,
   showTonight,
 }) {
-  const studyName    = config.study_name        || 'Study Participant Dashboard';
+  const studyName    = config.study_short_name || config.study_name || 'Study Dashboard';
   const contactEmail = config.contact_email     || '';
   const greeting     = config.dashboard_greeting || 'Welcome back';
   const firstName    = participant['First Name'] || 'Participant';
@@ -299,6 +299,7 @@ export default function DashboardPage({
               hstUploadLink={hstUploadLink}
               showFullHistory={showFullHistory}
               breakNights={breakNights}
+              subjectId={subjectId}
             />
           </section>
 

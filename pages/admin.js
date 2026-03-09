@@ -57,7 +57,7 @@ export async function getServerSideProps({ req, query }) {
     return {
       props: {
         authenticated:      false,
-        studyName:          config.study_name || activeStudy?.name || 'Study Dashboard',
+        studyName:          config.study_short_name || config.study_name || activeStudy?.name || 'Study Dashboard',
         error:              query.error || null,
         adminCodeConfigured: !!adminCode,
         studies:            studies,
@@ -136,7 +136,7 @@ export async function getServerSideProps({ req, query }) {
   return {
     props: {
       authenticated: true,
-      studyName:     config.study_name || activeStudy?.name || 'Study Dashboard',
+      studyName:     config.study_short_name || config.study_name || activeStudy?.name || 'Study Dashboard',
       summaries,
       stats,
       studies,

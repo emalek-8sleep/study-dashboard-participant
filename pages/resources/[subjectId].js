@@ -30,7 +30,7 @@ export async function getServerSideProps({ params, req }) {
 }
 
 export default function ResourcesPage({ config, docs, troubleshooting, subjectId }) {
-  const studyName    = config.study_name    || 'Study Participant Dashboard';
+  const studyName    = config.study_short_name || config.study_name || 'Study Dashboard';
   const contactEmail = config.contact_email || '';
 
   return (
