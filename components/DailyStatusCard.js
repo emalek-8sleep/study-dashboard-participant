@@ -8,32 +8,12 @@
  *  - Inline troubleshooting tips (from the sheet)
  *  - An action button with a configurable URL (e.g. survey link)
  *  - A "needs attention" / "valid" / "not recorded" state
+ *  - An acknowledgment button that persists to Google Sheets
  *
  * Also shows a collapsible history of all previous nights.
  */
 
-import { useState, useEffect } from 'react';
-
-// ─── Acknowledgment helpers (localStorage) ────────────────────────────────────
-
-function ackKey(subjectId, colName, dateStr) {
-  return `ack_${subjectId}_${colName}_${dateStr}`;
-}
-
-function loadAck(subjectId, colName, dateStr) {
-  if (typeof window === 'undefined') return false;
-  try { return !!localStorage.getItem(ackKey(subjectId, colName, dateStr)); } catch { return false; }
-}
-
-function saveAck(subjectId, colName, dateStr) {
-  if (typeof window === 'undefined') return;
-  try { localStorage.setItem(ackKey(subjectId, colName, dateStr), '1'); } catch {}
-}
-
-function clearAck(subjectId, colName, dateStr) {
-  if (typeof window === 'undefined') return;
-  try { localStorage.removeItem(ackKey(subjectId, colName, dateStr)); } catch {}
-}
+import { useState } from 'react';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -69,9 +49,17 @@ function parseTips(raw) {
 
 // ─── Single field row ─────────────────────────────────────────────────────────
 
-function FieldRow({ field, row, actionUrl, subjectId = '', dateStr = '', showAck = false }) {
-  const [tipsOpen,   setTipsOpen]   = useState(false);
-  const [acked,      setAcked]      = useState(false);
+/**
+ * @param {object}   field        - Check-in field config row from Sheet
+ * @param {object}   row          - Daily Status row data
+ * @param {string}   actionUrl    - Pre-built action URL (or empty string)
+ * @param {boolean}  isAcked      - Whether this field is acknowledged
+ * @param {boolean}  ackPending   - Whether an ack save is in-flight
+ * @param {function} onToggleAck  - Called with (colName, dateStr, add: boolean)
+ * @param {string}   dateStr      - YYYY-MM-DD date for today's row (used as ack key component)
+ */
+function FieldRow({ field, row, actionUrl, isAcked = false, ackPending = false, onToggleAck, dateStr = '' }) {
+  const [tipsOpen, setTipsOpen] = useState(false);
 
   const colName    = field['Column Name'] || '';
   const label      = field['Field Label'] || colName;
@@ -82,28 +70,15 @@ function FieldRow({ field, row, actionUrl, subjectId = '', dateStr = '', showAck
 
   const tips        = parseTips(field['Invalid Tips'] || '');
   const actionLabel = (field['Action Label'] || '').trim();
+  const showAck     = invalid && !!onToggleAck && !!dateStr;
 
-  // Restore acknowledgment from localStorage on mount
-  useEffect(() => {
-    if (invalid && showAck && subjectId && dateStr) {
-      setAcked(loadAck(subjectId, colName, dateStr));
-    }
-  }, [invalid, showAck, subjectId, colName, dateStr]);
-
-  function toggleAck() {
-    const next = !acked;
-    setAcked(next);
-    if (next) saveAck(subjectId, colName, dateStr);
-    else      clearAck(subjectId, colName, dateStr);
-  }
-
-  const bg    = unknown ? 'bg-slate-50'      : valid ? 'bg-emerald-50'    : acked ? 'bg-amber-50/60' : 'bg-red-50';
-  const icon  = unknown ? '–'                : valid ? '✓'                : '✗';
-  const color = unknown ? 'text-slate-400'   : valid ? 'text-emerald-600' : 'text-red-500';
-  const statusLabel = unknown ? 'Not recorded' : valid ? 'Valid' : 'Needs attention';
+  const bg    = unknown ? 'bg-slate-50'      : valid ? 'bg-emerald-50'    : isAcked ? 'bg-slate-50' : 'bg-red-50';
+  const icon  = unknown ? '–'                : valid ? '✓'                : isAcked ? '✓'            : '✗';
+  const color = unknown ? 'text-slate-400'   : valid ? 'text-emerald-600' : isAcked ? 'text-slate-400' : 'text-red-500';
+  const statusLabel = unknown ? 'Not recorded' : valid ? 'Valid' : isAcked ? 'Acknowledged' : 'Needs attention';
 
   return (
-    <div className={`rounded-xl px-4 py-3 ${bg} transition-colors`}>
+    <div className={`rounded-xl px-4 py-3 ${bg}`}>
       <div className="flex items-center gap-3">
         <span className={`text-sm font-bold w-4 text-center shrink-0 ${color}`}>{icon}</span>
         <span className="text-sm font-medium text-slate-700 flex-1">{label}</span>
@@ -153,27 +128,33 @@ function FieldRow({ field, row, actionUrl, subjectId = '', dateStr = '', showAck
             <p className="text-xs text-slate-500">Contact your study coordinator if you need help.</p>
           )}
 
-          {/* Acknowledgment checkbox — only shown in "today" view when showAck is true */}
+          {/* Acknowledgment button — saves to Google Sheet */}
           {showAck && (
-            <button
-              onClick={toggleAck}
-              className={`flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg transition w-full text-left mt-1 ${
-                acked
-                  ? 'bg-emerald-100 text-emerald-700'
-                  : 'bg-white/70 text-slate-500 hover:bg-white hover:text-slate-700 border border-slate-200'
-              }`}
-            >
-              <span className={`w-4 h-4 rounded flex items-center justify-center shrink-0 border transition ${
-                acked ? 'bg-emerald-500 border-emerald-500' : 'border-slate-300'
-              }`}>
-                {acked && (
-                  <svg className="w-2.5 h-2.5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+            <div className="pt-1">
+              {isAcked ? (
+                <button
+                  onClick={() => onToggleAck(colName, dateStr, false)}
+                  disabled={ackPending}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition disabled:opacity-50"
+                >
+                  <svg className="w-3.5 h-3.5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
                   </svg>
-                )}
-              </span>
-              {acked ? "I've acknowledged this issue" : "Mark as acknowledged"}
-            </button>
+                  {ackPending ? 'Saving…' : 'Acknowledged — undo'}
+                </button>
+              ) : (
+                <button
+                  onClick={() => onToggleAck(colName, dateStr, true)}
+                  disabled={ackPending}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 px-3 py-1.5 rounded-lg transition disabled:opacity-50"
+                >
+                  <svg className="w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  {ackPending ? 'Saving…' : "I've reviewed this"}
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -266,8 +247,72 @@ function HistoryRow({ row, checkinFields, config, isBreakNight = false }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function DailyStatusCard({ todayStatus, history, checkinFields, config, hstUploadLink, showFullHistory = false, breakNights = [], subjectId = '' }) {
+/**
+ * @param {string[]} initialAcknowledgments - Array of "colName_YYYY-MM-DD" strings from the Sheet
+ * @param {string}   subjectId              - Participant's Subject ID (for the ack API call)
+ * @param {string}   studySlug              - Active study slug (for the ack API call)
+ */
+export default function DailyStatusCard({
+  todayStatus,
+  history,
+  checkinFields,
+  config,
+  hstUploadLink,
+  showFullHistory = false,
+  breakNights = [],
+  initialAcknowledgments = [],
+  subjectId = '',
+  studySlug = '',
+}) {
   const [showHistory, setShowHistory] = useState(showFullHistory);
+
+  // ── Acknowledgment state — synced to Google Sheets ───────────────────────
+  // Keyed as "colName_YYYY-MM-DD", initialised server-side from the Sheet
+  const [acks,       setAcks]       = useState(() => new Set(initialAcknowledgments));
+  const [ackPending, setAckPending] = useState(new Set()); // in-flight field names
+
+  const todayDateStr = todayStatus
+    ? (todayStatus['Date'] || '').toString().trim().split('T')[0]
+    : '';
+
+  async function handleToggleAck(colName, dateStr, add) {
+    const key = `${colName}_${dateStr}`;
+
+    // Optimistic update
+    const nextAcks = new Set(acks);
+    if (add) nextAcks.add(key); else nextAcks.delete(key);
+    setAcks(nextAcks);
+
+    // Mark as pending
+    setAckPending(prev => new Set([...prev, colName]));
+
+    try {
+      const res = await fetch('/api/acknowledge', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          id:        subjectId,
+          study:     studySlug,
+          fieldName: colName,
+          dateStr,
+          action:    add ? 'add' : 'remove',
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (err) {
+      console.error('[ack] save failed:', err.message);
+      // Rollback on error
+      setAcks(acks);
+    } finally {
+      setAckPending(prev => {
+        const next = new Set(prev);
+        next.delete(colName);
+        return next;
+      });
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
 
   const hasToday   = !!todayStatus;
   const pastDays   = (history || []).filter(r => r !== todayStatus);
@@ -311,8 +356,20 @@ export default function DailyStatusCard({ todayStatus, history, checkinFields, c
             checkinFields.map((field, i) => {
               const urlKey    = (field['Action URL Key'] || '').toLowerCase().replace(/\s+/g, '_');
               const actionUrl = urlKey ? (config[urlKey] || '') : '';
-              const dateStr   = (todayStatus['Date'] || '').trim().split('T')[0];
-              return <FieldRow key={i} field={field} row={todayStatus} actionUrl={actionUrl} subjectId={subjectId} dateStr={dateStr} showAck={true} />;
+              const colName   = field['Column Name'] || '';
+              const ackKey    = `${colName}_${todayDateStr}`;
+              return (
+                <FieldRow
+                  key={i}
+                  field={field}
+                  row={todayStatus}
+                  actionUrl={actionUrl}
+                  isAcked={acks.has(ackKey)}
+                  ackPending={ackPending.has(colName)}
+                  onToggleAck={subjectId ? handleToggleAck : null}
+                  dateStr={todayDateStr}
+                />
+              );
             })
           ) : (
             <p className="text-sm text-slate-400 text-center py-4">

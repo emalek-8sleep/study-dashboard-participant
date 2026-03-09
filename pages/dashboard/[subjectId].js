@@ -88,6 +88,12 @@ export async function getServerSideProps({ params, req }) {
   const todayStr       = new Date().toISOString().split('T')[0];
   const isBreakNight   = breakNights.includes(todayStr);
 
+  // ── Acknowledgments ─────────────────────────────────────────────────────────
+  // "Acknowledgments" column in Participants tab — pipe-separated "colName_YYYY-MM-DD" tokens
+  // e.g. "hrv_2026-03-08|rhr_2026-03-07"
+  const acksRaw              = (participant['Acknowledgments'] || '').toString().trim();
+  const initialAcknowledgments = acksRaw ? acksRaw.split('|').map(s => s.trim()).filter(Boolean) : [];
+
   // ── Sheet-driven settings ───────────────────────────────────────────────────
   // Set in Study Config tab:  show_full_history | true   and   show_tonight | false
   const showFullHistory = (config.show_full_history || '').toLowerCase() === 'true';
@@ -103,12 +109,14 @@ export async function getServerSideProps({ params, req }) {
       comments,
       shipments,
       subjectId,
+      studySlug,
       hstUploadLink,
       tonightInfo,
       breakNights,
       isBreakNight,
       showFullHistory,
       showTonight,
+      initialAcknowledgments,
     },
   };
 }
@@ -122,14 +130,16 @@ export default function DashboardPage({
   comments,
   shipments,
   subjectId,
+  studySlug,
   hstUploadLink,
   tonightInfo,
   breakNights,
   isBreakNight,
   showFullHistory,
   showTonight,
+  initialAcknowledgments,
 }) {
-  const studyName    = config.study_short_name || config.study_name || 'Study Dashboard';
+  const studyName    = config.study_name        || 'Study Participant Dashboard';
   const contactEmail = config.contact_email     || '';
   const greeting     = config.dashboard_greeting || 'Welcome back';
   const firstName    = participant['First Name'] || 'Participant';
@@ -299,7 +309,9 @@ export default function DashboardPage({
               hstUploadLink={hstUploadLink}
               showFullHistory={showFullHistory}
               breakNights={breakNights}
+              initialAcknowledgments={initialAcknowledgments || []}
               subjectId={subjectId}
+              studySlug={studySlug || ''}
             />
           </section>
 
