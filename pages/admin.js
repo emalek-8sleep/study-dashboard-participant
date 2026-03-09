@@ -22,7 +22,7 @@ export async function getServerSideProps({ req, query }) {
   const {
     getStudyConfig, getAllParticipants, getAllDailyStatuses,
     getAllComments, getPhases, getCheckinFields, deriveProgress,
-    getAllMetrics, buildMetricsSummary,
+    getAllDailyStatusRows, buildMetricsSummary,
   } = await import('../lib/sheets');
 
   const studies = getStudies();
@@ -68,14 +68,13 @@ export async function getServerSideProps({ req, query }) {
   }
 
   // Fetch all data for this study in parallel
-  const metricsTabName = config.metrics_tab_name || 'Metrics';
-  const [participants, allStatuses, allComments, phases, checkinFields, metrics] = await Promise.all([
+  const [participants, allStatuses, allComments, phases, checkinFields, allStatusRows] = await Promise.all([
     getAllParticipants(sheetId),
     getAllDailyStatuses(sheetId),
     getAllComments(sheetId),
     getPhases(sheetId),
     getCheckinFields(sheetId),
-    getAllMetrics(sheetId, metricsTabName),
+    getAllDailyStatusRows(sheetId),
   ]);
 
   // Build per-participant summary
@@ -166,7 +165,11 @@ export async function getServerSideProps({ req, query }) {
     fieldStats,
   };
 
-  const metricsSummary = buildMetricsSummary(metrics);
+  // The "metrics" for the Data tab are ALL Daily Status rows.
+  // buildMetricsSummary skips Subject ID, Date, and non-numeric columns automatically.
+  const metricsSummary    = buildMetricsSummary(allStatusRows);
+  // Column names that are already shown on the participant dashboard (from Check-in Fields)
+  const checkinFieldCols  = checkinFields.map((f) => (f['Column Name'] || '').trim()).filter(Boolean);
 
   return {
     props: {
@@ -174,8 +177,9 @@ export async function getServerSideProps({ req, query }) {
       studyName:     config.study_short_name || config.study_name || activeStudy?.name || 'Study Dashboard',
       summaries,
       stats,
-      metrics,
+      metrics:        allStatusRows,
       metricsSummary,
+      checkinFieldCols,
       studies,
       activeSlug,
     },
@@ -186,7 +190,7 @@ export async function getServerSideProps({ req, query }) {
 
 export default function AdminPage({
   authenticated, studyName, error, adminCodeConfigured,
-  summaries, stats, metrics, metricsSummary, studies, activeSlug,
+  summaries, stats, metrics, metricsSummary, checkinFieldCols, studies, activeSlug,
 }) {
   if (!authenticated) {
     return (
@@ -206,6 +210,7 @@ export default function AdminPage({
       stats={stats}
       metrics={metrics || []}
       metricsSummary={metricsSummary || {}}
+      checkinFieldCols={checkinFieldCols || []}
       studies={studies}
       activeSlug={activeSlug}
     />
@@ -341,7 +346,7 @@ function AdminLogin({ studyName, adminCodeConfigured, studies, activeSlug }) {
 
 // ─── Main admin dashboard ──────────────────────────────────────────────────────
 
-function AdminDashboard({ studyName, summaries, stats, metrics, metricsSummary, studies, activeSlug }) {
+function AdminDashboard({ studyName, summaries, stats, metrics, metricsSummary, checkinFieldCols, studies, activeSlug }) {
   const [search,     setSearch]     = useState('');
   const [filter,     setFilter]     = useState('all');
   const [activeTab,  setActiveTab]  = useState('overview');
@@ -445,7 +450,7 @@ function AdminDashboard({ studyName, summaries, stats, metrics, metricsSummary, 
             <MetricsView
               metrics={metrics}
               metricsSummary={metricsSummary}
-              stats={stats}
+              checkinFieldCols={checkinFieldCols}
               activeSlug={activeSlug}
             />
           )}
@@ -618,11 +623,11 @@ function AdminDashboard({ studyName, summaries, stats, metrics, metricsSummary, 
                   desc:    'When true, all previous nights are expanded by default on the dashboard instead of collapsed behind a toggle.',
                 },
                 {
-                  key:     'metrics_tab_name',
-                  values:  'Any tab name',
-                  default: 'Metrics',
-                  label:   'Metrics Tab Name',
-                  desc:    'The name of the Google Sheet tab containing backend metrics. Required columns: Subject ID, Date. All other columns are study-specific (e.g. AHI, Vibration). Coordinators paste data here; the admin Data tab reads it automatically.',
+                  key:     'Condition',
+                  values:  'Any text',
+                  default: '—',
+                  label:   'Condition Column',
+                  desc:    'Add a "Condition" column to the Daily Status tab to tag nights (e.g. Baseline, Testing, Washout). The admin Data tab will show a filter dropdown for it automatically. Leave blank for untagged nights.',
                 },
               ].map(({ key, values, default: def, label, desc }) => (
                 <div key={key} className="px-6 py-4 flex items-start gap-4">
@@ -796,24 +801,30 @@ function AdminChat({ stats, metrics, activeSlug }) {
 
 // ─── MetricsView ─────────────────────────────────────────────────────────────
 
-function MetricsView({ metrics, metricsSummary, stats, activeSlug }) {
-  const [filterPid, setFilterPid] = useState('');
-  const [sortBy,    setSortBy]    = useState('date');
+// Columns that are always internal/system — never shown as metric columns
+const INTERNAL_COLS = new Set([
+  'Subject ID', 'Date', 'Acknowledgments', 'Tonight Checklist',
+]);
 
-  const metricCols = metrics.length > 0
-    ? Object.keys(metrics[0]).filter((k) => k !== 'Subject ID' && k !== 'Date')
+function MetricsView({ metrics, metricsSummary, checkinFieldCols, activeSlug }) {
+  const [filterPid,       setFilterPid]       = useState('');
+  const [filterCondition, setFilterCondition] = useState('');
+  const [sortBy,          setSortBy]          = useState('date');
+
+  // All non-internal columns present in the data
+  const allCols = metrics.length > 0
+    ? Object.keys(metrics[0]).filter((k) => !INTERNAL_COLS.has(k))
     : [];
 
-  const filtered = metrics.filter((m) =>
-    !filterPid || (m['Subject ID'] || '').toLowerCase().includes(filterPid.toLowerCase())
-  );
+  // Separate "Condition" column if it exists (used for filtering, not shown as metric card)
+  const hasCondition    = allCols.includes('Condition');
+  const displayCols     = allCols.filter((k) => k !== 'Condition');
+  const checkinSet      = new Set(checkinFieldCols);
 
-  const sorted = [...filtered].sort((a, b) => {
-    if (sortBy === 'date')    return new Date(b['Date']) - new Date(a['Date']);
-    if (sortBy === 'subject') return (a['Subject ID'] || '').localeCompare(b['Subject ID'] || '');
-    // Sort by metric column (highest first)
-    return (parseFloat(b[sortBy]) || 0) - (parseFloat(a[sortBy]) || 0);
-  });
+  // Unique condition values for the filter dropdown
+  const conditionValues = hasCondition
+    ? [...new Set(metrics.map((m) => (m['Condition'] || '').trim()).filter(Boolean))].sort()
+    : [];
 
   // Most-recent reading per participant
   const latestByPid = {};
@@ -825,78 +836,97 @@ function MetricsView({ metrics, metricsSummary, stats, activeSlug }) {
   });
   const participantCount = Object.keys(latestByPid).length;
 
+  // Only the non-check-in metric columns get stat cards
+  const metricStatCols = displayCols.filter((k) => !checkinSet.has(k) && metricsSummary[k]);
+
+  const filtered = metrics.filter((m) => {
+    if (filterPid && !(m['Subject ID'] || '').toLowerCase().includes(filterPid.toLowerCase())) return false;
+    if (filterCondition && (m['Condition'] || '').trim() !== filterCondition) return false;
+    return true;
+  });
+
+  const sorted = [...filtered].sort((a, b) => {
+    if (sortBy === 'date')    return new Date(b['Date']) - new Date(a['Date']);
+    if (sortBy === 'subject') return (a['Subject ID'] || '').localeCompare(b['Subject ID'] || '');
+    return (parseFloat(b[sortBy]) || 0) - (parseFloat(a[sortBy]) || 0);
+  });
+
   if (metrics.length === 0) {
     return (
-      <div className="space-y-4">
-        <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center">
-          <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-4">
-            <svg className="w-6 h-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
-          </div>
-          <h3 className="text-sm font-semibold text-slate-700 mb-1">No metrics data yet</h3>
-          <p className="text-xs text-slate-400 max-w-sm mx-auto">
-            Add a <strong>Metrics</strong> tab to your Google Sheet with columns: <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">Subject ID</code>, <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">Date</code>, and any study-specific metrics (e.g. AHI, Vibration, SpO2 Min). Then paste your data and refresh.
-          </p>
-          <p className="text-xs text-slate-400 mt-2">
-            You can customize the tab name in Study Config: <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">metrics_tab_name</code>
-          </p>
+      <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center">
+        <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto mb-4">
+          <svg className="w-6 h-6 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+              d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          </svg>
         </div>
+        <h3 className="text-sm font-semibold text-slate-700 mb-1">No Daily Status data yet</h3>
+        <p className="text-xs text-slate-400 max-w-sm mx-auto">
+          Once participants have Daily Status rows, all columns appear here — including any backend metrics
+          (e.g. <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">AHI</code>, <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">Vibration</code>, <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">Condition</code>) you add to the tab.
+          Columns in the <strong>Check-in Fields</strong> tab are already visible to participants; all others are admin-only.
+        </p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
 
-      {/* Summary header */}
-      <div className="flex items-center justify-between">
+      {/* Header row */}
+      <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-sm font-bold text-slate-800">Metrics Data</h2>
+          <h2 className="text-sm font-bold text-slate-800">Daily Status Data</h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            {metrics.length} reading{metrics.length !== 1 ? 's' : ''} across {participantCount} participant{participantCount !== 1 ? 's' : ''} · {metricCols.length} metric{metricCols.length !== 1 ? 's' : ''}
+            {metrics.length} row{metrics.length !== 1 ? 's' : ''} across {participantCount} participant{participantCount !== 1 ? 's' : ''} · {displayCols.length} column{displayCols.length !== 1 ? 's' : ''}
           </p>
+        </div>
+        {/* Legend */}
+        <div className="flex items-center gap-3 shrink-0">
+          <span className="flex items-center gap-1.5 text-xs text-slate-400">
+            <span className="w-2 h-2 rounded-full bg-brand-400 inline-block" />
+            Participant-visible
+          </span>
+          <span className="flex items-center gap-1.5 text-xs text-slate-400">
+            <span className="w-2 h-2 rounded-full bg-slate-300 inline-block" />
+            Admin-only
+          </span>
         </div>
       </div>
 
-      {/* Aggregate stat cards */}
-      {metricCols.length > 0 && (
+      {/* Aggregate stat cards — only for non-check-in numeric columns */}
+      {metricStatCols.length > 0 && (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-          {metricCols.map((col) => {
+          {metricStatCols.map((col) => {
             const stat = metricsSummary[col];
             return (
               <div key={col} className="bg-white rounded-2xl border border-slate-100 p-4">
                 <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 truncate">{col}</p>
-                {stat ? (
-                  <div className="space-y-1">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-slate-400">Avg</span>
-                      <span className="font-bold text-slate-800 font-mono">{stat.avg}</span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                      <span className="text-slate-400">Min</span>
-                      <span className="font-semibold text-emerald-600 font-mono">{stat.min}</span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                      <span className="text-slate-400">Max</span>
-                      <span className="font-semibold text-red-500 font-mono">{stat.max}</span>
-                    </div>
-                    <div className="flex justify-between text-xs pt-1 border-t border-slate-50">
-                      <span className="text-slate-400">n</span>
-                      <span className="text-slate-500 font-mono">{stat.count}</span>
-                    </div>
+                <div className="space-y-1">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-400">Avg</span>
+                    <span className="font-bold text-slate-800 font-mono">{stat.avg}</span>
                   </div>
-                ) : (
-                  <p className="text-xs text-slate-300 italic">Non-numeric</p>
-                )}
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-400">Min</span>
+                    <span className="font-semibold text-emerald-600 font-mono">{stat.min}</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-slate-400">Max</span>
+                    <span className="font-semibold text-red-500 font-mono">{stat.max}</span>
+                  </div>
+                  <div className="flex justify-between text-xs pt-1 border-t border-slate-50">
+                    <span className="text-slate-400">n</span>
+                    <span className="text-slate-500 font-mono">{stat.count}</span>
+                  </div>
+                </div>
               </div>
             );
           })}
         </div>
       )}
 
-      {/* Filters */}
+      {/* Filters row */}
       <div className="flex flex-col sm:flex-row gap-3">
         <input
           type="text"
@@ -905,6 +935,18 @@ function MetricsView({ metrics, metricsSummary, stats, activeSlug }) {
           onChange={(e) => setFilterPid(e.target.value)}
           className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
         />
+        {hasCondition && conditionValues.length > 0 && (
+          <select
+            value={filterCondition}
+            onChange={(e) => setFilterCondition(e.target.value)}
+            className="px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
+          >
+            <option value="">All conditions</option>
+            {conditionValues.map((v) => (
+              <option key={v} value={v}>{v}</option>
+            ))}
+          </select>
+        )}
         <select
           value={sortBy}
           onChange={(e) => setSortBy(e.target.value)}
@@ -912,43 +954,51 @@ function MetricsView({ metrics, metricsSummary, stats, activeSlug }) {
         >
           <option value="date">Newest first</option>
           <option value="subject">Subject ID</option>
-          {metricCols.map((col) => (
+          {displayCols.filter((c) => metricsSummary[c]).map((col) => (
             <option key={col} value={col}>Highest {col}</option>
           ))}
         </select>
       </div>
 
-      {/* Data table */}
+      {/* Table */}
       <div className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
         <div className="overflow-x-auto">
-          {/* Header */}
+          {/* Column headers */}
           <div
-            className="grid gap-4 px-5 py-3 bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-500 uppercase tracking-wide"
-            style={{ gridTemplateColumns: `140px 110px ${metricCols.map(() => '100px').join(' ')}` }}
+            className="grid gap-3 px-5 py-3 bg-slate-50 border-b border-slate-100"
+            style={{ gridTemplateColumns: `140px 100px${hasCondition ? ' 110px' : ''} ${displayCols.map(() => 'minmax(90px,1fr)').join(' ')}` }}
           >
-            <span>Subject ID</span>
-            <span>Date</span>
-            {metricCols.map((col) => (
-              <span key={col} className="text-right truncate">{col}</span>
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Subject ID</span>
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Date</span>
+            {hasCondition && (
+              <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Condition</span>
+            )}
+            {displayCols.map((col) => (
+              <div key={col} className="flex items-center gap-1.5">
+                <span
+                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${checkinSet.has(col) ? 'bg-brand-400' : 'bg-slate-300'}`}
+                  title={checkinSet.has(col) ? 'Visible to participants' : 'Admin-only'}
+                />
+                <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide truncate">{col}</span>
+              </div>
             ))}
           </div>
 
           {sorted.length === 0 ? (
-            <div className="text-center py-10 text-slate-400 text-sm">
-              No rows match your filter.
-            </div>
+            <div className="text-center py-10 text-slate-400 text-sm">No rows match your filters.</div>
           ) : (
             <div className="divide-y divide-slate-50">
               {sorted.map((row, idx) => {
                 const dateStr = row['Date']
                   ? (() => { try { return new Date(row['Date']).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' }); } catch { return row['Date']; } })()
                   : '—';
+                const condition = (row['Condition'] || '').trim();
 
                 return (
                   <div
                     key={idx}
-                    className="grid gap-4 px-5 py-3.5 hover:bg-slate-50 transition items-center"
-                    style={{ gridTemplateColumns: `140px 110px ${metricCols.map(() => '100px').join(' ')}` }}
+                    className="grid gap-3 px-5 py-3.5 hover:bg-slate-50 transition items-center"
+                    style={{ gridTemplateColumns: `140px 100px${hasCondition ? ' 110px' : ''} ${displayCols.map(() => 'minmax(90px,1fr)').join(' ')}` }}
                   >
                     <a
                       href={`/dashboard/${encodeURIComponent(row['Subject ID'])}`}
@@ -959,11 +1009,19 @@ function MetricsView({ metrics, metricsSummary, stats, activeSlug }) {
                       {row['Subject ID']}
                     </a>
                     <span className="text-xs text-slate-500">{dateStr}</span>
-                    {metricCols.map((col) => {
+                    {hasCondition && (
+                      <span className={`text-xs font-medium px-2 py-0.5 rounded-full w-fit ${
+                        condition
+                          ? 'bg-slate-100 text-slate-600'
+                          : 'text-slate-300'
+                      }`}>
+                        {condition || '—'}
+                      </span>
+                    )}
+                    {displayCols.map((col) => {
                       const val = row[col];
                       const num = parseFloat(val);
                       const stat = metricsSummary[col];
-                      // Highlight values at extremes
                       let colorClass = 'text-slate-700';
                       if (stat && !isNaN(num)) {
                         const range = stat.max - stat.min;
@@ -973,8 +1031,24 @@ function MetricsView({ metrics, metricsSummary, stats, activeSlug }) {
                           else if (pct <= 0.15) colorClass = 'text-emerald-600';
                         }
                       }
+                      // Check-in fields show as text badges (valid/invalid), metrics as numbers
+                      const isCheckin = checkinSet.has(col);
+                      const valLower  = (val || '').toString().toLowerCase().trim();
+                      const isValid   = valLower === 'yes' || valLower === 'true' || valLower === 'complete' || valLower === 'valid' || valLower === 'pass';
+                      const isBad     = valLower === 'no' || valLower === 'false' || valLower === 'incomplete' || valLower === 'invalid' || valLower === 'fail';
+
+                      if (isCheckin && (isValid || isBad)) {
+                        return (
+                          <span key={col} className={`text-xs font-semibold px-2 py-0.5 rounded-full w-fit ${
+                            isValid ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
+                          }`}>
+                            {isValid ? '✓' : '✗'} {val}
+                          </span>
+                        );
+                      }
+
                       return (
-                        <span key={col} className={`text-right text-sm font-mono ${val ? colorClass : 'text-slate-300'}`}>
+                        <span key={col} className={`text-sm font-mono ${val ? colorClass : 'text-slate-300'}`}>
                           {val || '—'}
                         </span>
                       );
