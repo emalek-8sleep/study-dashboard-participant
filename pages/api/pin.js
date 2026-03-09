@@ -142,8 +142,12 @@ export default async function handler(req, res) {
 
 function setSessionCookie(res, subjectId, studySlug) {
   const expires = new Date(Date.now() + 8 * 60 * 60 * 1000).toUTCString();
+  // participant_id lets the login page auto-redirect authenticated users.
+  // active_study tells the dashboard which sheet to load.
+  // No Secure flag — works on both http (dev) and https (prod).
   res.setHeader('Set-Cookie', [
-    `active_study=${encodeURIComponent(studySlug)}; Path=/; HttpOnly; Secure; SameSite=Strict; Expires=${expires}`,
+    `active_study=${encodeURIComponent(studySlug)}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
+    `participant_id=${encodeURIComponent(subjectId)}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
   ]);
 }
 

@@ -2,7 +2,14 @@ import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/router';
 import Head from 'next/head';
 
-export async function getServerSideProps() {
+export async function getServerSideProps({ req }) {
+  // If the participant is already authenticated, send them straight to the dashboard.
+  const cookies       = parseCookies(req.headers.cookie || '');
+  const participantId = cookies['participant_id'];
+  if (participantId) {
+    return { redirect: { destination: `/dashboard/${encodeURIComponent(participantId)}`, permanent: false } };
+  }
+
   const { getStudies, getSheetIdBySlug } = await import('../lib/studies');
   const { getStudyConfig }               = await import('../lib/sheets');
 
@@ -506,4 +513,13 @@ export default function LoginPage({ studies, contactEmail = '', contactPhone = '
       </div>
     </>
   );
+}
+
+function parseCookies(cookieHeader) {
+  const result = {};
+  (cookieHeader || '').split(';').forEach((pair) => {
+    const [key, ...rest] = pair.trim().split('=');
+    if (key) result[key.trim()] = decodeURIComponent(rest.join('=').trim());
+  });
+  return result;
 }

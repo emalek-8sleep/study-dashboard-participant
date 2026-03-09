@@ -21,7 +21,11 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { id, study, fieldName, dateStr, action } = req.body || {};
+  const { id, study, fieldName, dateStr, action, column } = req.body || {};
+
+  // `column` lets callers target a different Daily Status column (e.g. "Tonight Checklist").
+  // Defaults to "Acknowledgments" for backward compatibility with DailyStatusCard.
+  const targetColumn = column || 'Acknowledgments';
 
   if (!id || !fieldName || !dateStr) {
     return res.status(400).json({ success: false, error: 'Missing required fields: id, fieldName, dateStr.' });
@@ -43,8 +47,8 @@ export default async function handler(req, res) {
     return res.status(404).json({ success: false, error: `No Daily Status row found for ${id} on ${dateStr}.` });
   }
 
-  // Current acknowledgments: pipe-separated column names stored on that row
-  const raw      = (row['Acknowledgments'] || '').toString().trim();
+  // Current acknowledgments: pipe-separated values stored in targetColumn on that row
+  const raw      = (row[targetColumn] || '').toString().trim();
   const existing = raw ? raw.split('|').map(s => s.trim()).filter(Boolean) : [];
 
   let updated;
@@ -56,7 +60,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    await writeDailyStatusField(id, dateStr, 'Acknowledgments', updated.join('|'));
+    await writeDailyStatusField(id, dateStr, targetColumn, updated.join('|'));
     return res.status(200).json({ success: true, acknowledgments: updated });
   } catch (err) {
     console.error('[acknowledge] write error:', err.message);

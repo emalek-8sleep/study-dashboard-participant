@@ -88,13 +88,19 @@ export async function getServerSideProps({ params, req }) {
   const todayStr       = new Date().toISOString().split('T')[0];
   const isBreakNight   = breakNights.includes(todayStr);
 
-  // ── Acknowledgments ─────────────────────────────────────────────────────────
+  // ── Acknowledgments (last night's data review) ───────────────────────────────
   // "Acknowledgments" column lives on the Daily Status row for today,
   // not on the Participants tab — so each night's acks are naturally scoped.
   // Format: pipe-separated column names, e.g. "hrv|rhr"
   const todayRow = history[0] || null;
   const acksRaw  = todayRow ? (todayRow['Acknowledgments'] || '').toString().trim() : '';
   const initialAcknowledgments = acksRaw ? acksRaw.split('|').map(s => s.trim()).filter(Boolean) : [];
+
+  // ── Tonight checklist (preparation steps from Phase Description) ─────────────
+  // "Tonight Checklist" column lives on the same Daily Status row for today.
+  // Format: pipe-separated step keys, e.g. "step_0|step_2"
+  const checklistRaw = todayRow ? (todayRow['Tonight Checklist'] || '').toString().trim() : '';
+  const initialTonightChecklist = checklistRaw ? checklistRaw.split('|').map(s => s.trim()).filter(Boolean) : [];
 
   // ── Sheet-driven settings ───────────────────────────────────────────────────
   // Set in Study Config tab:  show_full_history | true   and   show_tonight | false
@@ -119,6 +125,8 @@ export async function getServerSideProps({ params, req }) {
       showFullHistory,
       showTonight,
       initialAcknowledgments,
+      initialTonightChecklist,
+      todayStr,
     },
   };
 }
@@ -140,6 +148,8 @@ export default function DashboardPage({
   showFullHistory,
   showTonight,
   initialAcknowledgments,
+  initialTonightChecklist,
+  todayStr,
 }) {
   const studyName    = config.study_name        || 'Study Participant Dashboard';
   const contactEmail = config.contact_email     || '';
@@ -295,7 +305,14 @@ export default function DashboardPage({
             <section id="tonight">
               <h2 className="section-title">Tonight</h2>
               <p className="section-subtitle">What's on for tonight based on your current phase.</p>
-              <TonightCard tonightInfo={tonightInfo} isBreakNight={isBreakNight} />
+              <TonightCard
+                tonightInfo={tonightInfo}
+                isBreakNight={isBreakNight}
+                subjectId={subjectId}
+                studySlug={studySlug}
+                todayStr={todayStr}
+                initialTonightChecklist={initialTonightChecklist || []}
+              />
             </section>
           )}
 
