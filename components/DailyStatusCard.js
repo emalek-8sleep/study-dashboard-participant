@@ -267,7 +267,8 @@ export default function DailyStatusCard({
   const [showHistory, setShowHistory] = useState(showFullHistory);
 
   // ── Acknowledgment state — synced to Google Sheets ───────────────────────
-  // Keyed as "colName_YYYY-MM-DD", initialised server-side from the Sheet
+  // Keyed by colName only — stored on the Daily Status row for today,
+  // so the date is implicit (no colName_date compound keys needed)
   const [acks,       setAcks]       = useState(() => new Set(initialAcknowledgments));
   const [ackPending, setAckPending] = useState(new Set()); // in-flight field names
 
@@ -276,11 +277,9 @@ export default function DailyStatusCard({
     : '';
 
   async function handleToggleAck(colName, dateStr, add) {
-    const key = `${colName}_${dateStr}`;
-
-    // Optimistic update
+    // Optimistic update — key is just the column name
     const nextAcks = new Set(acks);
-    if (add) nextAcks.add(key); else nextAcks.delete(key);
+    if (add) nextAcks.add(colName); else nextAcks.delete(colName);
     setAcks(nextAcks);
 
     // Mark as pending
@@ -357,14 +356,13 @@ export default function DailyStatusCard({
               const urlKey    = (field['Action URL Key'] || '').toLowerCase().replace(/\s+/g, '_');
               const actionUrl = urlKey ? (config[urlKey] || '') : '';
               const colName   = field['Column Name'] || '';
-              const ackKey    = `${colName}_${todayDateStr}`;
               return (
                 <FieldRow
                   key={i}
                   field={field}
                   row={todayStatus}
                   actionUrl={actionUrl}
-                  isAcked={acks.has(ackKey)}
+                  isAcked={acks.has(colName)}
                   ackPending={ackPending.has(colName)}
                   onToggleAck={subjectId ? handleToggleAck : null}
                   dateStr={todayDateStr}

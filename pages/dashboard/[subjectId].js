@@ -89,9 +89,11 @@ export async function getServerSideProps({ params, req }) {
   const isBreakNight   = breakNights.includes(todayStr);
 
   // ── Acknowledgments ─────────────────────────────────────────────────────────
-  // "Acknowledgments" column in Participants tab — pipe-separated "colName_YYYY-MM-DD" tokens
-  // e.g. "hrv_2026-03-08|rhr_2026-03-07"
-  const acksRaw              = (participant['Acknowledgments'] || '').toString().trim();
+  // "Acknowledgments" column lives on the Daily Status row for today,
+  // not on the Participants tab — so each night's acks are naturally scoped.
+  // Format: pipe-separated column names, e.g. "hrv|rhr"
+  const todayRow = history[0] || null;
+  const acksRaw  = todayRow ? (todayRow['Acknowledgments'] || '').toString().trim() : '';
   const initialAcknowledgments = acksRaw ? acksRaw.split('|').map(s => s.trim()).filter(Boolean) : [];
 
   // ── Sheet-driven settings ───────────────────────────────────────────────────
