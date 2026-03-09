@@ -13,7 +13,7 @@
  */
 
 import Head    from 'next/head';
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 
 // ─── Server-side ─────────────────────────────────────────────────────────────
 
@@ -125,12 +125,42 @@ export async function getServerSideProps({ req, query }) {
     return (a.id).localeCompare(b.id);
   });
 
+  // Phase breakdown — group participants by current phase name
+  const phaseCounts = {};
+  summaries.forEach((s) => {
+    const key = s.currentPhase || 'No Phase / Pending';
+    phaseCounts[key] = (phaseCounts[key] || 0) + 1;
+  });
+  // Sort by phase name so it reads in order
+  const phaseBreakdown = Object.entries(phaseCounts)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([phase, count]) => ({ phase, count }));
+
+  // Last-night field stats (valid / invalid counts per check-in field)
+  const fieldStats = checkinFields.map((f) => {
+    const col     = f['Column Name'] || '';
+    const label   = f['Field Label'] || col;
+    const valid   = summaries.filter((s) => {
+      const status = allStatuses[(s.id || '').toLowerCase()];
+      const v = (status?.[col] || '').toString().toLowerCase().trim();
+      return v === 'yes' || v === 'true' || v === 'complete' || v === 'valid' || v === 'pass';
+    }).length;
+    const invalid = summaries.filter((s) => {
+      const status = allStatuses[(s.id || '').toLowerCase()];
+      const v = (status?.[col] || '').toString().toLowerCase().trim();
+      return v === 'no' || v === 'false' || v === 'incomplete' || v === 'invalid' || v === 'fail';
+    }).length;
+    return { label, valid, invalid, noData: summaries.length - valid - invalid };
+  });
+
   const stats = {
     total:        summaries.length,
     withIssues:   summaries.filter((s) => s.issueCount > 0).length,
     noData:       summaries.filter((s) => s.noData).length,
     openComments: summaries.filter((s) => s.openComments > 0).length,
     allGood:      summaries.filter((s) => s.checkinGood).length,
+    phaseBreakdown,
+    fieldStats,
   };
 
   return {
@@ -388,6 +418,66 @@ function AdminDashboard({ studyName, summaries, stats, studies, activeSlug }) {
             <StatCard label="No Data Today"      value={stats.noData}       color="slate" />
           </div>
 
+          {/* ── Study overview: phase breakdown + field stats ── */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Phase breakdown */}
+            {stats.phaseBreakdown.length > 0 && (
+              <div className="card border-slate-100">
+                <h3 className="text-sm font-semibold text-slate-700 mb-3">Participants by Phase</h3>
+                <div className="space-y-2">
+                  {stats.phaseBreakdown.map(({ phase, count }) => (
+                    <div key={phase} className="flex items-center gap-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs font-medium text-slate-600 truncate">{phase}</span>
+                          <span className="text-xs font-bold text-slate-800 ml-2 shrink-0">{count}</span>
+                        </div>
+                        <div className="h-1.5 rounded-full bg-slate-100 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-brand-500 transition-all"
+                            style={{ width: `${Math.round((count / stats.total) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Last-night field stats */}
+            {stats.fieldStats.length > 0 && (
+              <div className="card border-slate-100">
+                <h3 className="text-sm font-semibold text-slate-700 mb-3">Last Night's Check-In Summary</h3>
+                <div className="space-y-2">
+                  {stats.fieldStats.map(({ label, valid, invalid, noData }) => (
+                    <div key={label} className="flex items-center gap-2 text-xs">
+                      <span className="w-28 shrink-0 text-slate-600 font-medium truncate">{label}</span>
+                      <div className="flex items-center gap-1.5 flex-1">
+                        {valid > 0 && (
+                          <span className="inline-flex items-center gap-1 bg-emerald-50 text-emerald-700 font-semibold px-2 py-0.5 rounded-full">
+                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />{valid} valid
+                          </span>
+                        )}
+                        {invalid > 0 && (
+                          <span className="inline-flex items-center gap-1 bg-red-50 text-red-700 font-semibold px-2 py-0.5 rounded-full">
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />{invalid} issues
+                          </span>
+                        )}
+                        {noData > 0 && (
+                          <span className="text-slate-400">{noData} no data</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Claude study status chat ── */}
+          <AdminChat stats={stats} activeSlug={activeSlug} />
+
           {/* ── Filters & search ── */}
           <div className="flex flex-col sm:flex-row gap-3">
             <input
@@ -519,6 +609,135 @@ function AdminDashboard({ studyName, summaries, stats, studies, activeSlug }) {
         </main>
       </div>
     </>
+  );
+}
+
+// ─── AdminChat ────────────────────────────────────────────────────────────────
+
+function AdminChat({ stats, activeSlug }) {
+  const [messages, setMessages] = useState([
+    {
+      role: 'assistant',
+      content: "Hey! I can help you pull together a study status update or answer questions about last night's data. What would you like to know?",
+    },
+  ]);
+  const [input,   setInput]   = useState('');
+  const [loading, setLoading] = useState(false);
+  const bottomRef             = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  async function handleSend(e) {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text || loading) return;
+
+    const next = [...messages, { role: 'user', content: text }];
+    setMessages(next);
+    setInput('');
+    setLoading(true);
+
+    try {
+      const res  = await fetch('/api/admin/chat', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ messages: next, stats, study: activeSlug }),
+      });
+      const data = await res.json();
+      setMessages(prev => [...prev, { role: 'assistant', content: data.reply || 'Sorry, something went wrong.' }]);
+    } catch {
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Something went wrong — please try again.' }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function handleSuggestion(text) {
+    setInput(text);
+  }
+
+  const suggestions = [
+    'Generate a study status update for last night',
+    'Which participants had issues?',
+    'How many people are in each phase?',
+    'Summarize last night\'s check-in results',
+  ];
+
+  return (
+    <div className="card border-slate-100">
+      <div className="flex items-center gap-2 mb-4">
+        <div className="w-7 h-7 rounded-lg bg-brand-50 flex items-center justify-center shrink-0">
+          <svg className="w-4 h-4 text-brand-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+          </svg>
+        </div>
+        <h3 className="text-sm font-semibold text-slate-700">Study Status Assistant</h3>
+        <span className="ml-auto text-xs text-slate-400 bg-slate-50 px-2 py-0.5 rounded-full">Powered by Claude</span>
+      </div>
+
+      {/* Message thread */}
+      <div className="bg-slate-50 rounded-xl p-4 space-y-3 max-h-72 overflow-y-auto mb-3">
+        {messages.map((m, i) => (
+          <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[85%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
+              m.role === 'user'
+                ? 'bg-brand-600 text-white'
+                : 'bg-white border border-slate-100 text-slate-700'
+            }`}>
+              {m.content}
+            </div>
+          </div>
+        ))}
+        {loading && (
+          <div className="flex justify-start">
+            <div className="bg-white border border-slate-100 rounded-xl px-3.5 py-2.5">
+              <span className="flex gap-1">
+                {[0,1,2].map(i => (
+                  <span key={i} className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+                ))}
+              </span>
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Suggestion chips — shown until user sends first message */}
+      {messages.length === 1 && (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {suggestions.map((s) => (
+            <button
+              key={s}
+              onClick={() => handleSuggestion(s)}
+              className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 font-medium px-3 py-1.5 rounded-full transition"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Input */}
+      <form onSubmit={handleSend} className="flex gap-2">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Ask about last night's data or generate a status update…"
+          disabled={loading}
+          className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white disabled:opacity-60"
+        />
+        <button
+          type="submit"
+          disabled={!input.trim() || loading}
+          className="px-4 py-2.5 bg-brand-600 hover:bg-brand-700 text-white text-sm font-semibold rounded-xl transition disabled:opacity-40 shrink-0"
+        >
+          Send
+        </button>
+      </form>
+    </div>
   );
 }
 

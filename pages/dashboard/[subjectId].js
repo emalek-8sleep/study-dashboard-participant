@@ -239,7 +239,7 @@ export default function DashboardPage({
                 <div className="bg-white/10 backdrop-blur rounded-xl p-4 text-center min-w-[140px]">
                   <div className="text-3xl font-bold">{pct}%</div>
                   <div className="text-brand-200 text-xs mt-1">Study Complete</div>
-                  <div className="text-brand-100 text-xs mt-0.5">{completedDays} of {totalDays} nights done</div>
+                  <div className="text-brand-100 text-xs mt-0.5">{completedDays} of {totalDays} valid nights done</div>
                 </div>
               )}
             </div>
@@ -301,8 +301,8 @@ export default function DashboardPage({
 
           {/* ── Daily status + HST upload ── */}
           <section id="daily-status">
-            <h2 className="section-title">Today's Actions</h2>
-            <p className="section-subtitle">Your device check-in status and daily tasks.</p>
+            <h2 className="section-title">Prepare for Tonight</h2>
+            <p className="section-subtitle">Review last night's check-in data and confirm you're ready for tonight.</p>
             <DailyStatusCard
               todayStatus={todayStatus}
               history={history}

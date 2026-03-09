@@ -3,10 +3,27 @@ import { useRouter } from 'next/router';
 import Head from 'next/head';
 
 export async function getServerSideProps() {
-  const { getStudies } = await import('../lib/studies');
-  const studies = getStudies();
+  const { getStudies, getSheetIdBySlug } = await import('../lib/studies');
+  const { getStudyConfig }               = await import('../lib/sheets');
+
+  const studies      = getStudies();
   const clientStudies = studies.map(({ name, slug }) => ({ name, slug }));
-  return { props: { studies: clientStudies } };
+
+  // Fetch contact info from the first study's config so we can show it on the
+  // "Don't know your ID?" and "Forgot PIN?" prompts — no personal data exposed.
+  let contactEmail = '';
+  let contactPhone = '';
+  try {
+    const firstSlug = studies[0]?.slug || '';
+    const sheetId   = getSheetIdBySlug(firstSlug);
+    if (sheetId) {
+      const config = await getStudyConfig(sheetId);
+      contactEmail = config.contact_email || '';
+      contactPhone = config.contact_phone || '';
+    }
+  } catch { /* non-fatal — login page works without contact info */ }
+
+  return { props: { studies: clientStudies, contactEmail, contactPhone } };
 }
 
 // ─── 4-digit PIN input — four individual boxes, auto-advance ─────────────────
@@ -99,12 +116,37 @@ function ErrorBanner({ message }) {
 
 // ─── Main login page ──────────────────────────────────────────────────────────
 
-export default function LoginPage({ studies }) {
+// ─── Contact info helper ─────────────────────────────────────────────────────
+
+function ContactHelp({ contactEmail, contactPhone, label = 'contact your study coordinator' }) {
+  const hasEmail = !!contactEmail;
+  const hasPhone = !!contactPhone;
+  if (!hasEmail && !hasPhone) {
+    return <span>{label}</span>;
+  }
+  return (
+    <span>
+      reach out to your coordinator
+      {hasPhone && (
+        <> — text <a href={`sms:${contactPhone}`} className="text-brand-500 font-medium hover:underline">{contactPhone}</a></>
+      )}
+      {hasEmail && hasPhone && ' or '}
+      {hasEmail && (
+        <> email <a href={`mailto:${contactEmail}`} className="text-brand-500 font-medium hover:underline">{contactEmail}</a></>
+      )}
+    </span>
+  );
+}
+
+// ─── Main login page ──────────────────────────────────────────────────────────
+
+export default function LoginPage({ studies, contactEmail = '', contactPhone = '' }) {
   const router = useRouter();
   const multiStudy = studies.length > 1;
 
   // step: 'id' | 'pin-create' | 'pin-create-confirm' | 'pin-enter'
   const [step,        setStep]        = useState('id');
+  const [showIdHelp,  setShowIdHelp]  = useState(false);
   const [subjectId,   setSubjectId]   = useState('');
   const [studySlug,   setStudySlug]   = useState(studies[0]?.slug || '');
   const [loading,     setLoading]     = useState(false);
@@ -338,6 +380,24 @@ export default function LoginPage({ studies }) {
                     {loading ? <><Spinner /> Checking...</> : <>Continue <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg></>}
                   </button>
                 </form>
+
+                {/* Don't know your ID? */}
+                <div className="mt-4 pt-4 border-t border-slate-100">
+                  <button
+                    onClick={() => setShowIdHelp(!showIdHelp)}
+                    className="text-xs text-slate-400 hover:text-slate-600 transition w-full text-center"
+                  >
+                    {showIdHelp ? '▲ Hide' : "Don't know your Subject ID?"}
+                  </button>
+                  {showIdHelp && (
+                    <div className="mt-3 bg-slate-50 rounded-xl px-4 py-3 text-xs text-slate-600 space-y-1.5">
+                      <p>Your Subject ID was included in your enrollment email when you joined the study.</p>
+                      <p>
+                        Can't find it? <ContactHelp contactEmail={contactEmail} contactPhone={contactPhone} /> and they'll send it to you.
+                      </p>
+                    </div>
+                  )}
+                </div>
               </>
             )}
 
@@ -428,8 +488,7 @@ export default function LoginPage({ studies }) {
                 </form>
 
                 <p className="text-center text-xs text-slate-400 mt-4">
-                  Forgot your PIN?{' '}
-                  <span className="text-brand-500">Contact your study coordinator.</span>
+                  Forgot your PIN? <ContactHelp contactEmail={contactEmail} contactPhone={contactPhone} label="contact your coordinator" /> — they can look it up for you.
                 </p>
               </>
             )}

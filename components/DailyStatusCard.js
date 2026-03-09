@@ -1,14 +1,13 @@
 /**
  * DailyStatusCard
  *
- * Shows the participant's most recent night's check-in status,
- * with dynamic fields driven by the "Check-in Fields" Google Sheet tab.
+ * Shows last night's check-in status as a "Prepare for Tonight" checklist.
+ * Invalid fields appear as unchecked items — participants check them off after
+ * reviewing the troubleshooting steps. Acknowledgments save to the Daily Status
+ * row in Google Sheets so coordinators can see what was reviewed.
  *
- * Each field can have:
- *  - Inline troubleshooting tips (from the sheet)
- *  - An action button with a configurable URL (e.g. survey link)
- *  - A "needs attention" / "valid" / "not recorded" state
- *  - An acknowledgment button that persists to Google Sheets
+ * Valid fields show as already checked. When all invalid items are acknowledged,
+ * a "You're ready for tonight!" banner is shown.
  *
  * Also shows a collapsible history of all previous nights.
  */
@@ -47,7 +46,26 @@ function parseTips(raw) {
   return t ? [t] : [];
 }
 
-// ─── Single field row ─────────────────────────────────────────────────────────
+// ─── Checkbox icon ────────────────────────────────────────────────────────────
+
+function Checkbox({ checked, pending, className = '' }) {
+  if (checked) {
+    return (
+      <div className={`w-5 h-5 rounded-full bg-emerald-500 flex items-center justify-center shrink-0 ${className}`}>
+        <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+        </svg>
+      </div>
+    );
+  }
+  return (
+    <div className={`w-5 h-5 rounded-full border-2 border-slate-300 flex items-center justify-center shrink-0 ${pending ? 'opacity-50' : ''} ${className}`}>
+      {pending && <div className="w-2 h-2 rounded-full bg-slate-300 animate-pulse" />}
+    </div>
+  );
+}
+
+// ─── Single field row (checklist style) ──────────────────────────────────────
 
 /**
  * @param {object}   field        - Check-in field config row from Sheet
@@ -56,37 +74,69 @@ function parseTips(raw) {
  * @param {boolean}  isAcked      - Whether this field is acknowledged
  * @param {boolean}  ackPending   - Whether an ack save is in-flight
  * @param {function} onToggleAck  - Called with (colName, dateStr, add: boolean)
- * @param {string}   dateStr      - YYYY-MM-DD date for today's row (used as ack key component)
+ * @param {string}   dateStr      - YYYY-MM-DD date for today's row
  */
 function FieldRow({ field, row, actionUrl, isAcked = false, ackPending = false, onToggleAck, dateStr = '' }) {
   const [tipsOpen, setTipsOpen] = useState(false);
 
-  const colName    = field['Column Name'] || '';
-  const label      = field['Field Label'] || colName;
-  const rawVal     = row ? (row[colName] || '') : '';
-  const valid      = isValid(rawVal);
-  const invalid    = isInvalid(rawVal);
-  const unknown    = !valid && !invalid;
-
+  const colName     = field['Column Name'] || '';
+  const label       = field['Field Label'] || colName;
+  const rawVal      = row ? (row[colName] || '') : '';
+  const valid       = isValid(rawVal);
+  const invalid     = isInvalid(rawVal);
+  const unknown     = !valid && !invalid;
   const tips        = parseTips(field['Invalid Tips'] || '');
   const actionLabel = (field['Action Label'] || '').trim();
-  const showAck     = invalid && !!onToggleAck && !!dateStr;
+  const canAck      = invalid && !!onToggleAck && !!dateStr;
+  const resolved    = valid || isAcked;   // green checkbox if valid OR acknowledged
 
-  const bg    = unknown ? 'bg-slate-50'      : valid ? 'bg-emerald-50'    : isAcked ? 'bg-slate-50' : 'bg-red-50';
-  const icon  = unknown ? '–'                : valid ? '✓'                : isAcked ? '✓'            : '✗';
-  const color = unknown ? 'text-slate-400'   : valid ? 'text-emerald-600' : isAcked ? 'text-slate-400' : 'text-red-500';
-  const statusLabel = unknown ? 'Not recorded' : valid ? 'Valid' : isAcked ? 'Acknowledged' : 'Needs attention';
+  // Valid → green; acknowledged-invalid → muted; unreviewed-invalid → red; unknown → gray
+  const bg = valid    ? 'bg-emerald-50 border border-emerald-100'
+           : isAcked  ? 'bg-slate-50 border border-slate-100'
+           : invalid  ? 'bg-red-50 border border-red-100'
+           :            'bg-slate-50 border border-slate-100';
 
   return (
     <div className={`rounded-xl px-4 py-3 ${bg}`}>
+      {/* ── Row header ── */}
       <div className="flex items-center gap-3">
-        <span className={`text-sm font-bold w-4 text-center shrink-0 ${color}`}>{icon}</span>
-        <span className="text-sm font-medium text-slate-700 flex-1">{label}</span>
-        <span className={`text-xs font-semibold ${color}`}>{statusLabel}</span>
+        {/* Checkbox — clickable when invalid */}
+        {canAck ? (
+          <button
+            onClick={() => onToggleAck(colName, dateStr, !isAcked)}
+            disabled={ackPending}
+            aria-label={isAcked ? 'Mark as unreviewed' : 'Mark as reviewed'}
+            className="shrink-0 transition hover:scale-110 disabled:opacity-50"
+          >
+            <Checkbox checked={isAcked} pending={ackPending} />
+          </button>
+        ) : (
+          <Checkbox checked={resolved} pending={false} />
+        )}
+
+        {/* Label */}
+        <div className="flex-1 min-w-0">
+          <span className={`text-sm font-medium ${resolved ? 'text-slate-500' : invalid ? 'text-slate-800' : 'text-slate-500'}`}>
+            {invalid && !isAcked
+              ? `Review ${label} steps`
+              : label}
+          </span>
+        </div>
+
+        {/* Status badge */}
+        <span className={`text-xs font-semibold shrink-0 ${
+          valid    ? 'text-emerald-600' :
+          isAcked  ? 'text-slate-400' :
+          invalid  ? 'text-red-500' :
+                     'text-slate-400'
+        }`}>
+          {valid ? 'Valid' : isAcked ? 'Reviewed ✓' : invalid ? 'Needs attention' : 'Not recorded'}
+        </span>
       </div>
 
+      {/* ── Expandable detail for invalid items ── */}
       {invalid && (
-        <div className="mt-2 ml-7 space-y-2">
+        <div className="mt-2 ml-8 space-y-2">
           {actionUrl && actionLabel && (
             <a
               href={actionUrl}
@@ -105,7 +155,7 @@ function FieldRow({ field, row, actionUrl, isAcked = false, ackPending = false, 
             <div>
               <button
                 onClick={() => setTipsOpen(!tipsOpen)}
-                className="text-xs font-semibold text-red-500 hover:text-red-600 underline underline-offset-2 transition"
+                className={`text-xs font-semibold underline underline-offset-2 transition ${isAcked ? 'text-slate-400 hover:text-slate-600' : 'text-red-500 hover:text-red-600'}`}
               >
                 {tipsOpen ? 'Hide tips ↑' : 'See troubleshooting tips ↓'}
               </button>
@@ -113,7 +163,7 @@ function FieldRow({ field, row, actionUrl, isAcked = false, ackPending = false, 
                 <ol className="mt-2 space-y-1.5">
                   {tips.map((tip, i) => (
                     <li key={i} className="flex items-start gap-2 text-xs text-slate-600">
-                      <span className="w-4 h-4 rounded-full bg-red-100 text-red-500 text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
+                      <span className={`w-4 h-4 rounded-full text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5 ${isAcked ? 'bg-slate-100 text-slate-400' : 'bg-red-100 text-red-500'}`}>
                         {i + 1}
                       </span>
                       {tip}
@@ -128,33 +178,18 @@ function FieldRow({ field, row, actionUrl, isAcked = false, ackPending = false, 
             <p className="text-xs text-slate-500">Contact your study coordinator if you need help.</p>
           )}
 
-          {/* Acknowledgment button — saves to Google Sheet */}
-          {showAck && (
-            <div className="pt-1">
-              {isAcked ? (
-                <button
-                  onClick={() => onToggleAck(colName, dateStr, false)}
-                  disabled={ackPending}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-500 bg-slate-100 hover:bg-slate-200 px-3 py-1.5 rounded-lg transition disabled:opacity-50"
-                >
-                  <svg className="w-3.5 h-3.5 text-emerald-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                  </svg>
-                  {ackPending ? 'Saving…' : 'Acknowledged — undo'}
-                </button>
-              ) : (
-                <button
-                  onClick={() => onToggleAck(colName, dateStr, true)}
-                  disabled={ackPending}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-600 bg-white border border-slate-200 hover:border-slate-300 hover:bg-slate-50 px-3 py-1.5 rounded-lg transition disabled:opacity-50"
-                >
-                  <svg className="w-3.5 h-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                  {ackPending ? 'Saving…' : "I've reviewed this"}
-                </button>
-              )}
-            </div>
+          {/* Ack confirm text when checked */}
+          {canAck && isAcked && (
+            <p className="text-xs text-slate-400">
+              Marked as reviewed —{' '}
+              <button
+                onClick={() => onToggleAck(colName, dateStr, false)}
+                disabled={ackPending}
+                className="underline underline-offset-2 hover:text-slate-600 transition"
+              >
+                undo
+              </button>
+            </p>
           )}
         </div>
       )}
@@ -316,12 +351,16 @@ export default function DailyStatusCard({
   const hasToday   = !!todayStatus;
   const pastDays   = (history || []).filter(r => r !== todayStatus);
 
-  const actionCount = hasToday
-    ? checkinFields.filter(f => isInvalid(todayStatus[f['Column Name']] || '')).length
-    : 0;
+  // Fields that were invalid last night
+  const invalidFields = hasToday
+    ? checkinFields.filter(f => isInvalid(todayStatus[f['Column Name']] || ''))
+    : [];
+  const actionCount = invalidFields.length;
 
-  const allGood = hasToday && actionCount === 0 &&
-    checkinFields.some(f => isValid(todayStatus[f['Column Name']] || ''));
+  // All-clear: no invalid fields, OR all invalid fields acknowledged
+  const allValid    = hasToday && actionCount === 0 && checkinFields.some(f => isValid(todayStatus[f['Column Name']] || ''));
+  const allReviewed = hasToday && actionCount > 0 && invalidFields.every(f => acks.has(f['Column Name'] || ''));
+  const readyForTonight = allValid || allReviewed;
 
   return (
     <div className="card border-slate-100">
@@ -340,13 +379,27 @@ export default function DailyStatusCard({
             <p className="text-xs text-slate-400 mt-0.5">No data recorded yet</p>
           )}
         </div>
-        {hasToday && actionCount > 0 && (
+        {hasToday && actionCount > 0 && !allReviewed && (
           <span className="badge bg-amber-100 text-amber-700 shrink-0">
-            {actionCount} item{actionCount > 1 ? 's' : ''} need attention
+            {actionCount - [...acks].filter(k => invalidFields.some(f => f['Column Name'] === k)).length} of {actionCount} to review
           </span>
         )}
-        {allGood && <span className="badge badge-complete shrink-0">All good!</span>}
+        {readyForTonight && <span className="badge badge-complete shrink-0">Ready for tonight ✓</span>}
       </div>
+
+      {/* Ready-for-tonight banner */}
+      {readyForTonight && hasToday && (
+        <div className="mb-4 flex items-center gap-3 bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3">
+          <div className="w-7 h-7 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+            <svg className="w-4 h-4 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+            </svg>
+          </div>
+          <p className="text-sm font-medium text-emerald-800">
+            {allValid ? "All good — you're ready for tonight!" : "You've reviewed everything — you're ready for tonight!"}
+          </p>
+        </div>
+      )}
 
       {/* Today's fields */}
       {hasToday ? (
