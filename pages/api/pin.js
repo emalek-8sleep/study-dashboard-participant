@@ -36,11 +36,12 @@ export default async function handler(req, res) {
 
     if (!participant) return res.status(200).json({ hasPin: false });
 
-    // Pad to 4 digits only if a PIN was actually stored — handles Sheets collapsing
-    // leading-zero PINs (e.g. 0000 → stored as number 0 → string '0').
-    // An empty cell must stay empty so hasPin comes back false for new participants.
-    const rawPin = (participant['PIN'] || '').toString().trim();
-    const pin    = rawPin ? rawPin.padStart(4, '0') : '';
+    // Strip non-digit characters before checking — Sheets may export a numeric PIN
+    // like 1234 as "1,234" (with a thousands separator) depending on spreadsheet locale,
+    // which would otherwise fail the \d{4} test and make hasPin come back false.
+    // Leading-zero PINs (e.g. 0000 stored as number 0) are handled by padStart.
+    const rawPin  = (participant['PIN'] || '').toString().replace(/\D/g, '');
+    const pin     = rawPin ? rawPin.padStart(4, '0') : '';
     return res.status(200).json({ hasPin: pin.length === 4 && /^\d{4}$/.test(pin) });
   }
 
@@ -93,8 +94,8 @@ export default async function handler(req, res) {
         });
       }
 
-      // Pad stored PIN only if a value exists — same logic as the hasPin check above
-      const rawStored = (participant['PIN'] || '').toString().trim();
+      // Strip non-digit characters — same locale-safe logic as the hasPin check above
+      const rawStored = (participant['PIN'] || '').toString().replace(/\D/g, '');
       const storedPin = rawStored ? rawStored.padStart(4, '0') : '';
       if (storedPin !== pin) {
         // Record failed attempt
