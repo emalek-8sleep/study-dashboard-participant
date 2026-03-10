@@ -28,6 +28,12 @@ export default async function handler(req, res) {
 
   // ── GET: does this participant have a PIN? ─────────────────────────────────
   if (req.method === 'GET') {
+    // CRITICAL: Prevent browser/Vercel CDN from caching this response.
+    // Without this, the browser caches { hasPin: false } and returns 304 on
+    // subsequent requests, even after the participant has set a PIN.
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+
     const { id, study } = req.query;
     if (!id) return res.status(400).json({ error: 'Missing id' });
 
@@ -57,6 +63,8 @@ export default async function handler(req, res) {
 
   // ── POST ──────────────────────────────────────────────────────────────────
   if (req.method === 'POST') {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+
     const { id, study, action, pin } = req.body || {};
 
     if (!id || !action || !pin) {

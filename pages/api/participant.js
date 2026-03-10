@@ -16,6 +16,10 @@ export default async function handler(req, res) {
   const { getParticipant, getStudyConfig } = await import('../../lib/sheets');
   const { getSheetIdBySlug } = await import('../../lib/studies');
 
+  // Prevent browser/Vercel CDN from caching participant lookups
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+
   const { id, verify, study } = req.query;
   if (!id) return res.status(400).json({ found: false, error: 'Missing id param' });
 
