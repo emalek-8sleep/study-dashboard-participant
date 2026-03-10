@@ -405,23 +405,35 @@ export default function DailyStatusCard({
       {hasToday ? (
         <div className="space-y-2">
           {checkinFields.length > 0 ? (
-            checkinFields.map((field, i) => {
-              const urlKey    = (field['Action URL Key'] || '').toLowerCase().replace(/\s+/g, '_');
-              const actionUrl = urlKey ? (config[urlKey] || '') : '';
-              const colName   = field['Column Name'] || '';
-              return (
-                <FieldRow
-                  key={i}
-                  field={field}
-                  row={todayStatus}
-                  actionUrl={actionUrl}
-                  isAcked={acks.has(colName)}
-                  ackPending={ackPending.has(colName)}
-                  onToggleAck={subjectId ? handleToggleAck : null}
-                  dateStr={todayDateStr}
-                />
-              );
-            })
+            // Only show fields that have data in todayStatus (non-empty values)
+            checkinFields
+              .filter(field => {
+                const colName = field['Column Name'] || '';
+                const value = (todayStatus[colName] || '').toString().trim();
+                return value.length > 0;
+              })
+              .map((field, i) => {
+                const urlKey    = (field['Action URL Key'] || '').toLowerCase().replace(/\s+/g, '_');
+                const actionUrl = urlKey ? (config[urlKey] || '') : '';
+                const colName   = field['Column Name'] || '';
+                return (
+                  <FieldRow
+                    key={i}
+                    field={field}
+                    row={todayStatus}
+                    actionUrl={actionUrl}
+                    isAcked={acks.has(colName)}
+                    ackPending={ackPending.has(colName)}
+                    onToggleAck={subjectId ? handleToggleAck : null}
+                    dateStr={todayDateStr}
+                  />
+                );
+              })
+              .length === 0 ? (
+              <p className="text-sm text-slate-400 text-center py-4">
+                No check-in data yet.
+              </p>
+            ) : null
           ) : (
             <p className="text-sm text-slate-400 text-center py-4">
               No check-in fields configured — add rows to the <strong>Check-in Fields</strong> tab in your sheet.
