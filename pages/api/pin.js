@@ -31,17 +31,27 @@ export default async function handler(req, res) {
     const { id, study } = req.query;
     if (!id) return res.status(400).json({ error: 'Missing id' });
 
-    const sheetId     = getSheetIdBySlug(study || '');
-    const participant = await getParticipant(id, sheetId);
+    // Read the PIN directly from the sheet via Apps Script (POST request).
+    // The gviz/tq CSV endpoint is aggressively cached by Google's CDN, so a
+    // PIN written seconds ago may not appear. The Apps Script reads live data.
+    let rawPin = '';
+    try {
+      const { readParticipantField } = await import('../../lib/sheets-write');
+      rawPin = await readParticipantField(id, 'PIN');
+    } catch (err) {
+      // If Apps Script read isn't available (old script version), fall back
+      // to the cached gviz/tq approach — better than breaking entirely.
+      console.warn('[pin] Apps Script read failed, falling back to gviz:', err.message);
+      const sheetId     = getSheetIdBySlug(study || '');
+      const participant = await getParticipant(id, sheetId);
+      if (!participant) return res.status(200).json({ hasPin: false });
+      rawPin = (participant['PIN'] || '').toString();
+    }
 
-    if (!participant) return res.status(200).json({ hasPin: false });
-
-    // Strip non-digit characters before checking — Sheets may export a numeric PIN
-    // like 1234 as "1,234" (with a thousands separator) depending on spreadsheet locale,
-    // which would otherwise fail the \d{4} test and make hasPin come back false.
-    // Leading-zero PINs (e.g. 0000 stored as number 0) are handled by padStart.
-    const rawPin  = (participant['PIN'] || '').toString().replace(/\D/g, '');
-    const pin     = rawPin ? rawPin.padStart(4, '0') : '';
+    // Strip non-digit characters — Sheets may format 1234 as "1,234" depending
+    // on locale. Leading-zero PINs (0000 stored as 0) are handled by padStart.
+    const cleaned = rawPin.replace(/\D/g, '');
+    const pin     = cleaned ? cleaned.padStart(4, '0') : '';
     return res.status(200).json({ hasPin: pin.length === 4 && /^\d{4}$/.test(pin) });
   }
 
@@ -94,8 +104,15 @@ export default async function handler(req, res) {
         });
       }
 
-      // Strip non-digit characters — same locale-safe logic as the hasPin check above
-      const rawStored = (participant['PIN'] || '').toString().replace(/\D/g, '');
+      // Read PIN live via Apps Script (same approach as the GET/hasPin check)
+      let rawStored = '';
+      try {
+        const { readParticipantField } = await import('../../lib/sheets-write');
+        rawStored = await readParticipantField(id, 'PIN');
+      } catch {
+        rawStored = (participant['PIN'] || '').toString();
+      }
+      rawStored = rawStored.replace(/\D/g, '');
       const storedPin = rawStored ? rawStored.padStart(4, '0') : '';
       if (storedPin !== pin) {
         // Record failed attempt
