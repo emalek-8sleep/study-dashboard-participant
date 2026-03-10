@@ -152,6 +152,7 @@ export default function DashboardPage({
   todayStr,
 }) {
   const studyName    = config.study_name        || 'Study Participant Dashboard';
+  const studyDisplay = config.study_short_name  || studyName;  // Used in navbar
   const contactEmail = config.contact_email     || '';
   const greeting     = config.dashboard_greeting || 'Welcome back';
   const firstName    = participant['First Name'] || 'Participant';
@@ -189,7 +190,7 @@ export default function DashboardPage({
 
       <div className="min-h-screen bg-slate-50">
         <Navbar
-          studyName={studyName}
+          studyName={studyDisplay}
           subjectId={subjectId}
           contactEmail={contactEmail}
           page="dashboard"
