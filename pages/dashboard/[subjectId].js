@@ -157,13 +157,6 @@ export default function DashboardPage({
   const greeting     = config.dashboard_greeting || 'Welcome back';
   const firstName    = participant['First Name'] || 'Participant';
 
-  // Debug logging
-  console.log('[dashboard] config keys:', Object.keys(config));
-  console.log('[dashboard] config.study_name:', JSON.stringify(config.study_name));
-  console.log('[dashboard] config.study_short_name:', JSON.stringify(config.study_short_name));
-  console.log('[dashboard] studyName:', studyName);
-  console.log('[dashboard] studyDisplay:', studyDisplay);
-
   const todayStatus        = history[0] || null;
   const commentsConfigured = !!(config.comments_script_url || '').trim();
 
