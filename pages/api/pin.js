@@ -28,26 +28,15 @@ export default async function handler(req, res) {
 
   // ── GET: does this participant have a PIN? ─────────────────────────────────
   if (req.method === 'GET') {
-    // CRITICAL: Prevent browser/Vercel CDN from caching this response.
-    // Without this, the browser caches { hasPin: false } and returns 304 on
-    // subsequent requests, even after the participant has set a PIN.
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
     res.setHeader('Pragma', 'no-cache');
 
     const { id, study } = req.query;
     if (!id) return res.status(400).json({ error: 'Missing id' });
 
-    const sheetId     = getSheetIdBySlug(study || '');
-    const participant = await getParticipant(id, sheetId);
-
-    if (!participant) {
-      console.log(`[pin] GET id=${id} → participant not found`);
-      return res.status(200).json({ hasPin: false });
-    }
-
-    // Strip non-digit characters — Sheets may format 1234 as "1,234" depending
-    // on locale. Leading-zero PINs (0000 stored as 0) are handled by padStart.
-    const rawPin  = (participant['PIN'] || '').toString();
+    // Read PIN via Apps Script (live, no caching) — gviz/tq caches writes
+    // for several minutes so a freshly-set PIN would otherwise not appear.
+    const rawPin = await readPinDirect(id);
     const cleaned = rawPin.replace(/\D/g, '');
     const pin     = cleaned ? cleaned.padStart(4, '0') : '';
     const hasPin  = pin.length === 4 && /^\d{4}$/.test(pin);
@@ -106,8 +95,9 @@ export default async function handler(req, res) {
         });
       }
 
-      // Strip non-digit characters — same locale-safe logic as the hasPin check
-      const rawStored = (participant['PIN'] || '').toString().replace(/\D/g, '');
+      // Read PIN live — same approach as GET so we don't compare against stale gviz data
+      const rawStoredFresh = await readPinDirect(id);
+      const rawStored = rawStoredFresh.replace(/\D/g, '');
       const storedPin = rawStored ? rawStored.padStart(4, '0') : '';
       if (storedPin !== pin) {
         // Record failed attempt
@@ -162,6 +152,25 @@ function setSessionCookie(res, subjectId, studySlug) {
     `active_study=${encodeURIComponent(studySlug)}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
     `participant_id=${encodeURIComponent(subjectId)}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
   ]);
+}
+
+/**
+ * Read the PIN for a participant directly via Apps Script (bypasses gviz cache).
+ * Falls back to empty string on any error — caller decides what to do.
+ *
+ * REQUIRES the updated Apps Script with action:'read' support deployed.
+ * See lib/sheets-write.js for the full Apps Script code to paste.
+ */
+async function readPinDirect(subjectId) {
+  try {
+    const { readParticipantField } = await import('../../lib/sheets-write');
+    const val = await readParticipantField(subjectId, 'PIN');
+    console.log(`[pin] readPinDirect id=${subjectId} → "${val}"`);
+    return val;
+  } catch (err) {
+    console.error(`[pin] readPinDirect failed for ${subjectId}:`, err.message);
+    return '';
+  }
 }
 
 function parseCookies(cookieStr) {
