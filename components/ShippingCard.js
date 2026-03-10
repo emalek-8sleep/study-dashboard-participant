@@ -27,12 +27,6 @@ function statusStyle(status) {
 }
 
 export default function ShippingCard({ shipments }) {
-  // Debug logging
-  if (shipments && shipments.length > 0) {
-    console.log('[ShippingCard] shipments:', shipments);
-    console.log('[ShippingCard] first shipment keys:', Object.keys(shipments[0]));
-  }
-
   // Nothing shipped yet
   if (!shipments || shipments.length === 0) {
     return (
