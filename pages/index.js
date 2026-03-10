@@ -174,7 +174,8 @@ export default function LoginPage({ studies, contactEmail = '', contactPhone = '
 
     try {
       // Verify subject ID exists
-      const idParams = new URLSearchParams({ id: trimmedId, study: studySlug });
+      // _t cache-buster prevents the browser from returning a 304 cached response
+      const idParams = new URLSearchParams({ id: trimmedId, study: studySlug, _t: Date.now() });
       const idRes  = await fetch(`/api/participant?${idParams.toString()}`);
       const idData = await idRes.json();
 
@@ -185,7 +186,7 @@ export default function LoginPage({ studies, contactEmail = '', contactPhone = '
       }
 
       // Check if PIN is already set
-      const pinParams = new URLSearchParams({ id: trimmedId, study: studySlug });
+      const pinParams = new URLSearchParams({ id: trimmedId, study: studySlug, _t: Date.now() });
       const pinRes  = await fetch(`/api/pin?${pinParams.toString()}`);
       const pinData = await pinRes.json();
 

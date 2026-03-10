@@ -37,28 +37,35 @@ export default async function handler(req, res) {
     const { id, study } = req.query;
     if (!id) return res.status(400).json({ error: 'Missing id' });
 
-    // Read the PIN directly from the sheet via Apps Script (POST request).
-    // The gviz/tq CSV endpoint is aggressively cached by Google's CDN, so a
-    // PIN written seconds ago may not appear. The Apps Script reads live data.
+    // Try Apps Script direct read first (no caching), fall back to gviz
     let rawPin = '';
+    let source = 'unknown';
     try {
       const { readParticipantField } = await import('../../lib/sheets-write');
       rawPin = await readParticipantField(id, 'PIN');
+      source = 'appsscript';
     } catch (err) {
-      // If Apps Script read isn't available (old script version), fall back
-      // to the cached gviz/tq approach — better than breaking entirely.
-      console.warn('[pin] Apps Script read failed, falling back to gviz:', err.message);
-      const sheetId     = getSheetIdBySlug(study || '');
-      const participant = await getParticipant(id, sheetId);
-      if (!participant) return res.status(200).json({ hasPin: false });
-      rawPin = (participant['PIN'] || '').toString();
+      console.warn('[pin] Apps Script read failed:', err.message);
+      try {
+        const sheetId     = getSheetIdBySlug(study || '');
+        const participant = await getParticipant(id, sheetId);
+        if (!participant) {
+          console.log(`[pin] GET id=${id} → participant not found via gviz`);
+          return res.status(200).json({ hasPin: false });
+        }
+        rawPin = (participant['PIN'] || '').toString();
+        source = 'gviz';
+      } catch (err2) {
+        console.error('[pin] gviz fallback also failed:', err2.message);
+        return res.status(200).json({ hasPin: false });
+      }
     }
 
-    // Strip non-digit characters — Sheets may format 1234 as "1,234" depending
-    // on locale. Leading-zero PINs (0000 stored as 0) are handled by padStart.
     const cleaned = rawPin.replace(/\D/g, '');
     const pin     = cleaned ? cleaned.padStart(4, '0') : '';
-    return res.status(200).json({ hasPin: pin.length === 4 && /^\d{4}$/.test(pin) });
+    const hasPin  = pin.length === 4 && /^\d{4}$/.test(pin);
+    console.log(`[pin] GET id=${id} source=${source} rawPin="${rawPin}" cleaned="${cleaned}" hasPin=${hasPin}`);
+    return res.status(200).json({ hasPin });
   }
 
   // ── POST ──────────────────────────────────────────────────────────────────
