@@ -37,34 +37,21 @@ export default async function handler(req, res) {
     const { id, study } = req.query;
     if (!id) return res.status(400).json({ error: 'Missing id' });
 
-    // Try Apps Script direct read first (no caching), fall back to gviz
-    let rawPin = '';
-    let source = 'unknown';
-    try {
-      const { readParticipantField } = await import('../../lib/sheets-write');
-      rawPin = await readParticipantField(id, 'PIN');
-      source = 'appsscript';
-    } catch (err) {
-      console.warn('[pin] Apps Script read failed:', err.message);
-      try {
-        const sheetId     = getSheetIdBySlug(study || '');
-        const participant = await getParticipant(id, sheetId);
-        if (!participant) {
-          console.log(`[pin] GET id=${id} → participant not found via gviz`);
-          return res.status(200).json({ hasPin: false });
-        }
-        rawPin = (participant['PIN'] || '').toString();
-        source = 'gviz';
-      } catch (err2) {
-        console.error('[pin] gviz fallback also failed:', err2.message);
-        return res.status(200).json({ hasPin: false });
-      }
+    const sheetId     = getSheetIdBySlug(study || '');
+    const participant = await getParticipant(id, sheetId);
+
+    if (!participant) {
+      console.log(`[pin] GET id=${id} → participant not found`);
+      return res.status(200).json({ hasPin: false });
     }
 
+    // Strip non-digit characters — Sheets may format 1234 as "1,234" depending
+    // on locale. Leading-zero PINs (0000 stored as 0) are handled by padStart.
+    const rawPin  = (participant['PIN'] || '').toString();
     const cleaned = rawPin.replace(/\D/g, '');
     const pin     = cleaned ? cleaned.padStart(4, '0') : '';
     const hasPin  = pin.length === 4 && /^\d{4}$/.test(pin);
-    console.log(`[pin] GET id=${id} source=${source} rawPin="${rawPin}" cleaned="${cleaned}" hasPin=${hasPin}`);
+    console.log(`[pin] GET id=${id} rawPin="${rawPin}" cleaned="${cleaned}" hasPin=${hasPin}`);
     return res.status(200).json({ hasPin });
   }
 
@@ -119,15 +106,8 @@ export default async function handler(req, res) {
         });
       }
 
-      // Read PIN live via Apps Script (same approach as the GET/hasPin check)
-      let rawStored = '';
-      try {
-        const { readParticipantField } = await import('../../lib/sheets-write');
-        rawStored = await readParticipantField(id, 'PIN');
-      } catch {
-        rawStored = (participant['PIN'] || '').toString();
-      }
-      rawStored = rawStored.replace(/\D/g, '');
+      // Strip non-digit characters — same locale-safe logic as the hasPin check
+      const rawStored = (participant['PIN'] || '').toString().replace(/\D/g, '');
       const storedPin = rawStored ? rawStored.padStart(4, '0') : '';
       if (storedPin !== pin) {
         // Record failed attempt
