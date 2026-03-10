@@ -52,9 +52,24 @@ export default async function handler(req, res) {
     `active_study=${encodeURIComponent(studySlug)}; Path=/; HttpOnly; SameSite=Strict; Expires=${expires}`,
   ]);
 
+  // Also check if they have a PIN to avoid a second API call in the frontend
+  // Perf: read PIN directly via Apps Script instead of waiting for gviz cache
+  let hasPin = false;
+  try {
+    const { readParticipantField } = await import('../../lib/sheets-write');
+    const rawPin = await readParticipantField(id, 'PIN');
+    const cleaned = rawPin.replace(/\D/g, '');
+    const pin = cleaned ? cleaned.padStart(4, '0') : '';
+    hasPin = pin.length === 4 && /^\d{4}$/.test(pin);
+  } catch (err) {
+    // If PIN read fails, just assume no PIN so we don't break the flow
+    console.error('[participant] Failed to read PIN:', err.message);
+  }
+
   return res.status(200).json({
     found: true,
     name: participant['First Name'] || null,
+    hasPin,
   });
 }
 

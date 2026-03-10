@@ -59,12 +59,7 @@ export default async function handler(req, res) {
       return res.status(400).json({ success: false, error: 'PIN must be exactly 4 digits.' });
     }
 
-    const sheetId     = getSheetIdBySlug(study || '');
-    const participant = await getParticipant(id, sheetId);
-
-    if (!participant) {
-      return res.status(200).json({ success: false, error: 'Participant not found.' });
-    }
+    const sheetId = getSheetIdBySlug(study || '');
 
     // ── action: 'set' — create/update PIN ───────────────────────────────────
     if (action === 'set') {

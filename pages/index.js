@@ -185,16 +185,12 @@ export default function LoginPage({ studies, contactEmail = '', contactPhone = '
         return;
       }
 
-      // Check if PIN is already set
-      const pinParams = new URLSearchParams({ id: trimmedId, study: studySlug, _t: Date.now() });
-      const pinRes  = await fetch(`/api/pin?${pinParams.toString()}`);
-      const pinData = await pinRes.json();
-
+      // PIN info is now included in the participant response (perf optimization)
       setLoading(false);
       setPin('');
       setConfirmPin('');
 
-      if (pinData.hasPin) {
+      if (idData.hasPin) {
         setStep('pin-enter');
       } else {
         setStep('pin-create');
