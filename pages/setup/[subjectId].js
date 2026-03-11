@@ -8,19 +8,25 @@
  * Tips are pipe-separated: "Keep pod flat | Avoid folding"
  */
 
-import Head from 'next/head';
+import Head   from 'next/head';
 import { useState } from 'react';
-import Link from 'next/link';
-import { getParticipant, getStudyConfig, getSetupSteps } from '../../lib/sheets';
+import Link   from 'next/link';
 import Navbar from '../../components/Navbar';
 
-export async function getServerSideProps({ params }) {
+export async function getServerSideProps({ params, req }) {
   const { subjectId } = params;
+  const { getSheetIdBySlug } = await import('../../lib/studies');
+  const { getParticipant, getStudyConfig, getSetupSteps } = await import('../../lib/sheets');
+
+  // Determine which study's sheet to use based on the active_study cookie
+  const cookies   = parseCookies(req.headers.cookie || '');
+  const studySlug = decodeURIComponent(cookies['active_study'] || '');
+  const sheetId   = getSheetIdBySlug(studySlug);
 
   const [participant, config, steps] = await Promise.all([
-    getParticipant(subjectId),
-    getStudyConfig(),
-    getSetupSteps(),
+    getParticipant(subjectId, sheetId),
+    getStudyConfig(sheetId),
+    getSetupSteps(sheetId),
   ]);
 
   if (!participant) {
@@ -34,6 +40,7 @@ export async function getServerSideProps({ params }) {
 
 export default function SetupPage({ config, steps, subjectId }) {
   const studyName    = config.study_name    || 'Study Participant Dashboard';
+  const studyDisplay = config.study_short_name || studyName;  // Used in navbar
   const contactEmail = config.contact_email || '';
 
   const [currentStep, setCurrentStep] = useState(0);
@@ -73,7 +80,7 @@ export default function SetupPage({ config, steps, subjectId }) {
       <>
         <Head><title>Setup · {studyName}</title></Head>
         <div className="min-h-screen bg-slate-50">
-          <Navbar studyName={studyName} subjectId={subjectId} contactEmail={contactEmail} page="dashboard" />
+          <Navbar studyName={studyDisplay} subjectId={subjectId} contactEmail={contactEmail} page="dashboard" />
           <div className="max-w-2xl mx-auto px-4 py-16 text-center text-slate-400">
             <p className="text-lg font-semibold text-slate-600">Setup guide coming soon</p>
             <p className="text-sm mt-2">Your coordinator hasn't added setup steps yet. Check back shortly!</p>
@@ -93,7 +100,7 @@ export default function SetupPage({ config, steps, subjectId }) {
       <>
         <Head><title>Setup Complete · {studyName}</title></Head>
         <div className="min-h-screen bg-slate-50">
-          <Navbar studyName={studyName} subjectId={subjectId} contactEmail={contactEmail} page="dashboard" />
+          <Navbar studyName={studyDisplay} subjectId={subjectId} contactEmail={contactEmail} page="dashboard" />
           <div className="max-w-2xl mx-auto px-4 py-16 text-center">
             <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-emerald-100 mb-6">
               <svg className="w-10 h-10 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -338,4 +345,13 @@ export default function SetupPage({ config, steps, subjectId }) {
       </div>
     </>
   );
+}
+
+function parseCookies(cookieHeader) {
+  const result = {};
+  cookieHeader.split(';').forEach((pair) => {
+    const [key, ...rest] = pair.trim().split('=');
+    if (key) result[key.trim()] = rest.join('=').trim();
+  });
+  return result;
 }

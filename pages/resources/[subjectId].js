@@ -1,20 +1,25 @@
 import Head from 'next/head';
-import { getParticipant, getStudyConfig, getDocs, getTroubleshooting } from '../../lib/sheets';
-import DocsSection from '../../components/DocsSection';
+import DocsSection          from '../../components/DocsSection';
 import TroubleshootingSection from '../../components/TroubleshootingSection';
-import Navbar from '../../components/Navbar';
+import Navbar               from '../../components/Navbar';
 
-export async function getServerSideProps({ params }) {
+export async function getServerSideProps({ params, req }) {
   const { subjectId } = params;
+  const { getSheetIdBySlug } = await import('../../lib/studies');
+  const { getParticipant, getStudyConfig, getDocs, getTroubleshooting } = await import('../../lib/sheets');
+
+  // Determine which study's sheet to use based on the active_study cookie
+  const cookies   = parseCookies(req.headers.cookie || '');
+  const studySlug = decodeURIComponent(cookies['active_study'] || '');
+  const sheetId   = getSheetIdBySlug(studySlug);
 
   const [participant, config, docs, troubleshooting] = await Promise.all([
-    getParticipant(subjectId),
-    getStudyConfig(),
-    getDocs(),
-    getTroubleshooting(),
+    getParticipant(subjectId, sheetId),
+    getStudyConfig(sheetId),
+    getDocs(sheetId),
+    getTroubleshooting(sheetId),
   ]);
 
-  // Redirect back to login if subject isn't valid
   if (!participant) {
     return { redirect: { destination: '/?error=not_found', permanent: false } };
   }
@@ -25,7 +30,7 @@ export async function getServerSideProps({ params }) {
 }
 
 export default function ResourcesPage({ config, docs, troubleshooting, subjectId }) {
-  const studyName    = config.study_name    || 'Study Participant Dashboard';
+  const studyName    = config.study_short_name || config.study_name || 'Study Dashboard';
   const contactEmail = config.contact_email || '';
 
   return (
@@ -107,4 +112,13 @@ export default function ResourcesPage({ config, docs, troubleshooting, subjectId
       </div>
     </>
   );
+}
+
+function parseCookies(cookieHeader) {
+  const result = {};
+  cookieHeader.split(';').forEach((pair) => {
+    const [key, ...rest] = pair.trim().split('=');
+    if (key) result[key.trim()] = rest.join('=').trim();
+  });
+  return result;
 }

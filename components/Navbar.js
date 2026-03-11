@@ -71,10 +71,10 @@ export default function Navbar({ studyName, subjectId, contactEmail, page = 'das
           </div>
 
           {/* Exit */}
-          <Link href="/"
+          <a href="/api/logout"
             className="text-xs text-slate-400 hover:text-slate-600 transition font-medium hidden sm:block shrink-0">
             Exit
-          </Link>
+          </a>
 
           {/* Mobile hamburger */}
           <button
@@ -118,9 +118,9 @@ export default function Navbar({ studyName, subjectId, contactEmail, page = 'das
             )}
 
             <div className="pt-2 border-t border-slate-100 mt-2">
-              <Link href="/" className="block px-3 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-lg">
+              <a href="/api/logout" className="block px-3 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-lg">
                 Exit Dashboard
-              </Link>
+              </a>
             </div>
           </div>
         )}

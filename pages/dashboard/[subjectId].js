@@ -1,33 +1,63 @@
 import Head from 'next/head';
 import Link from 'next/link';
-import {
-  getParticipant,
-  getStudyConfig,
-  getPhases,
-  getDailyStatusHistory,
-  getCheckinFields,
-  getComments,
-  getShipments,
-  deriveProgress,
-  buildParticipantUrl,
-} from '../../lib/sheets';
-import ProgressTracker from '../../components/ProgressTracker';
-import DailyStatusCard from '../../components/DailyStatusCard';
-import CommentsSection from '../../components/CommentsSection';
-import ShippingCard from '../../components/ShippingCard';
-import Navbar from '../../components/Navbar';
+import { useState, useEffect } from 'react';
 
-export async function getServerSideProps({ params }) {
+// Live clock — re-renders every minute, shows e.g. "Monday, March 9 · 3:42 PM"
+function LiveDateTime() {
+  const [display, setDisplay] = useState('');
+
+  useEffect(() => {
+    function format() {
+      const now = new Date();
+      const date = now.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+      const time = now.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      return `${date} · ${time}`;
+    }
+    setDisplay(format());
+    const id = setInterval(() => setDisplay(format()), 60_000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!display) return null;
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-brand-100 bg-white/10 px-2.5 py-1 rounded-full">
+      <svg className="w-3 h-3 opacity-70" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+          d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+      </svg>
+      {display}
+    </span>
+  );
+}
+import ProgressTracker      from '../../components/ProgressTracker';
+import DailyStatusCard      from '../../components/DailyStatusCard';
+import TonightCard          from '../../components/TonightCard';
+import CommentsSection      from '../../components/CommentsSection';
+import ShippingCard         from '../../components/ShippingCard';
+import ParticipantInfoCard  from '../../components/ParticipantInfoCard';
+import Navbar               from '../../components/Navbar';
+
+export async function getServerSideProps({ params, req }) {
   const { subjectId } = params;
+  const { getSheetIdBySlug } = await import('../../lib/studies');
+  const {
+    getParticipant, getStudyConfig, getPhases, getDailyStatusHistory,
+    getCheckinFields, getComments, getShipments, deriveProgress, buildParticipantUrl,
+  } = await import('../../lib/sheets');
+
+  // Determine which study's sheet to use based on the active_study cookie
+  const cookies   = parseCookies(req.headers.cookie || '');
+  const studySlug = decodeURIComponent(cookies['active_study'] || '');
+  const sheetId   = getSheetIdBySlug(studySlug);
 
   const [participant, config, phases, history, checkinFields, comments, shipments] = await Promise.all([
-    getParticipant(subjectId),
-    getStudyConfig(),
-    getPhases(),
-    getDailyStatusHistory(subjectId),
-    getCheckinFields(),
-    getComments(subjectId),
-    getShipments(subjectId),
+    getParticipant(subjectId, sheetId),
+    getStudyConfig(sheetId),
+    getPhases(sheetId),
+    getDailyStatusHistory(subjectId, sheetId),
+    getCheckinFields(sheetId),
+    getComments(subjectId, sheetId),
+    getShipments(subjectId, sheetId),
   ]);
 
   if (!participant) {
@@ -35,6 +65,49 @@ export async function getServerSideProps({ params }) {
   }
 
   const progress = deriveProgress(participant, phases);
+
+  // Build URLs here (server-side) since buildParticipantUrl isn't available client-side
+  const hstUploadLink = buildParticipantUrl(config.hst_upload_link || '', subjectId);
+
+  // ── Tonight's instructions ──────────────────────────────────────────────────
+  const currentPhase = progress.find((p) => p.status === 'inprogress') || progress.find((p) => p.status === 'pending');
+  const tonightDay   = currentPhase?.days?.find((d) => d.status === 'inprogress') || currentPhase?.days?.find((d) => d.status === 'pending');
+  const tonightInfo  = (currentPhase && tonightDay) ? {
+    phaseName:        currentPhase.phaseName,
+    phaseDescription: currentPhase.description || '',
+    phaseGoal:        currentPhase.goal         || '',
+    dayNumber:        tonightDay.dayNumber,
+    dayLabel:         tonightDay.dayLabel        || '',
+    completedDays:    currentPhase.completedDays,
+    totalDays:        currentPhase.totalDays,
+  } : null;
+
+  // ── Break nights ────────────────────────────────────────────────────────────
+  // "Break Nights" column in Participants tab — comma-separated dates (YYYY-MM-DD)
+  const breakNightsRaw = participant['Break Nights'] || participant['break_nights'] || '';
+  const breakNights    = breakNightsRaw.split(',').map((d) => d.trim()).filter(Boolean);
+  const todayStr       = new Date().toISOString().split('T')[0];
+  const isBreakNight   = breakNights.includes(todayStr);
+
+  // ── Acknowledgments (last night's data review) ───────────────────────────────
+  // "Acknowledgments" column lives on the Daily Status row for today,
+  // not on the Participants tab — so each night's acks are naturally scoped.
+  // Format: pipe-separated column names, e.g. "hrv|rhr"
+  const todayRow = history[0] || null;
+  const acksRaw  = todayRow ? (todayRow['Acknowledgments'] || '').toString().trim() : '';
+  const initialAcknowledgments = acksRaw ? acksRaw.split('|').map(s => s.trim()).filter(Boolean) : [];
+
+  // ── Tonight checklist (preparation steps from Phase Description) ─────────────
+  // "Tonight Checklist" column lives on the same Daily Status row for today.
+  // Format: pipe-separated step keys, e.g. "step_0|step_2"
+  const checklistRaw = todayRow ? (todayRow['Tonight Checklist'] || '').toString().trim() : '';
+  const initialTonightChecklist = checklistRaw ? checklistRaw.split('|').map(s => s.trim()).filter(Boolean) : [];
+
+  // ── Sheet-driven settings ───────────────────────────────────────────────────
+  // Set in Study Config tab:  show_full_history | true   and   show_tonight | false
+  const showFullHistory = (config.show_full_history || '').toLowerCase() === 'true';
+  const showTonight     = (config.show_tonight || 'true').toLowerCase() !== 'false';
+  const showParticipantInfo = (config.show_participant_info || 'true').toLowerCase() !== 'false';
 
   return {
     props: {
@@ -46,6 +119,17 @@ export async function getServerSideProps({ params }) {
       comments,
       shipments,
       subjectId,
+      studySlug,
+      hstUploadLink,
+      tonightInfo,
+      breakNights,
+      isBreakNight,
+      showFullHistory,
+      showTonight,
+      showParticipantInfo,
+      initialAcknowledgments,
+      initialTonightChecklist,
+      todayStr,
     },
   };
 }
@@ -59,14 +143,25 @@ export default function DashboardPage({
   comments,
   shipments,
   subjectId,
+  studySlug,
+  hstUploadLink,
+  tonightInfo,
+  breakNights,
+  isBreakNight,
+  showFullHistory,
+  showTonight,
+  showParticipantInfo,
+  initialAcknowledgments,
+  initialTonightChecklist,
+  todayStr,
 }) {
   const studyName    = config.study_name        || 'Study Participant Dashboard';
+  const studyDisplay = config.study_short_name  || studyName;  // Used in navbar
   const contactEmail = config.contact_email     || '';
   const greeting     = config.dashboard_greeting || 'Welcome back';
   const firstName    = participant['First Name'] || 'Participant';
 
   const todayStatus        = history[0] || null;
-  const hstUploadLink      = buildParticipantUrl(config.hst_upload_link || '', subjectId);
   const commentsConfigured = !!(config.comments_script_url || '').trim();
 
   // Attention: any check-in fields are invalid today
@@ -85,10 +180,10 @@ export default function DashboardPage({
   const currentPhase  = progress.find((p) => p.status === 'inprogress') || progress.find((p) => p.status === 'pending');
 
   // Show setup wizard link when participant is in the configured setup phase
-  const setupPhaseName  = (config.setup_phase || '').trim().toLowerCase();
-  const inSetupPhase    = setupPhaseName && currentPhase &&
+  const setupPhaseName = (config.setup_phase || '').trim().toLowerCase();
+  const inSetupPhase   = setupPhaseName && currentPhase &&
     currentPhase.phaseName.toLowerCase().includes(setupPhaseName);
-  const setupHref       = `/setup/${encodeURIComponent(subjectId)}`;
+  const setupHref      = `/setup/${encodeURIComponent(subjectId)}`;
 
   return (
     <>
@@ -99,7 +194,7 @@ export default function DashboardPage({
 
       <div className="min-h-screen bg-slate-50">
         <Navbar
-          studyName={studyName}
+          studyName={studyDisplay}
           subjectId={subjectId}
           contactEmail={contactEmail}
           page="dashboard"
@@ -152,13 +247,14 @@ export default function DashboardPage({
                 <p className="text-brand-200 text-sm font-medium mb-1">{greeting}</p>
                 <h1 className="text-2xl font-bold">{firstName}</h1>
                 <p className="text-brand-100 text-sm mt-1">Subject ID: {subjectId}</p>
+                <div className="mt-2"><LiveDateTime /></div>
               </div>
 
               {totalDays > 0 && (
                 <div className="bg-white/10 backdrop-blur rounded-xl p-4 text-center min-w-[140px]">
                   <div className="text-3xl font-bold">{pct}%</div>
                   <div className="text-brand-200 text-xs mt-1">Study Complete</div>
-                  <div className="text-brand-100 text-xs mt-0.5">{completedDays} of {totalDays} nights done</div>
+                  <div className="text-brand-100 text-xs mt-0.5">{completedDays} of {totalDays} valid nights done</div>
                 </div>
               )}
             </div>
@@ -209,16 +305,40 @@ export default function DashboardPage({
           {/* ── Shipping status ── */}
           <ShippingCard shipments={shipments} />
 
+          {/* ── Participant info ── */}
+          {showParticipantInfo && <ParticipantInfoCard participantData={participant} />}
+
+          {/* ── Tonight's instructions ── */}
+          {showTonight && (tonightInfo || isBreakNight) && (
+            <section id="tonight">
+              <h2 className="section-title">Tonight</h2>
+              <p className="section-subtitle">What's on for tonight based on your current phase.</p>
+              <TonightCard
+                tonightInfo={tonightInfo}
+                isBreakNight={isBreakNight}
+                subjectId={subjectId}
+                studySlug={studySlug}
+                todayStr={todayStr}
+                initialTonightChecklist={initialTonightChecklist || []}
+              />
+            </section>
+          )}
+
           {/* ── Daily status + HST upload ── */}
           <section id="daily-status">
-            <h2 className="section-title">Today's Actions</h2>
-            <p className="section-subtitle">Your device check-in status and daily tasks.</p>
+            <h2 className="section-title">Prepare for Tonight</h2>
+            <p className="section-subtitle">Review last night's check-in data and confirm you're ready for tonight.</p>
             <DailyStatusCard
               todayStatus={todayStatus}
               history={history}
               checkinFields={checkinFields}
               config={config}
               hstUploadLink={hstUploadLink}
+              showFullHistory={showFullHistory}
+              breakNights={breakNights}
+              initialAcknowledgments={initialAcknowledgments || []}
+              subjectId={subjectId}
+              studySlug={studySlug || ''}
             />
           </section>
 
@@ -263,4 +383,13 @@ export default function DashboardPage({
 function isInvalid(val) {
   const v = (val || '').toString().toLowerCase().trim();
   return v === 'no' || v === 'false' || v === 'incomplete' || v === 'invalid' || v === 'fail';
+}
+
+function parseCookies(cookieHeader) {
+  const result = {};
+  cookieHeader.split(';').forEach((pair) => {
+    const [key, ...rest] = pair.trim().split('=');
+    if (key) result[key.trim()] = rest.join('=').trim();
+  });
+  return result;
 }
