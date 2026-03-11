@@ -29,12 +29,13 @@ function LiveDateTime() {
     </span>
   );
 }
-import ProgressTracker   from '../../components/ProgressTracker';
-import DailyStatusCard   from '../../components/DailyStatusCard';
-import TonightCard       from '../../components/TonightCard';
-import CommentsSection   from '../../components/CommentsSection';
-import ShippingCard      from '../../components/ShippingCard';
-import Navbar            from '../../components/Navbar';
+import ProgressTracker      from '../../components/ProgressTracker';
+import DailyStatusCard      from '../../components/DailyStatusCard';
+import TonightCard          from '../../components/TonightCard';
+import CommentsSection      from '../../components/CommentsSection';
+import ShippingCard         from '../../components/ShippingCard';
+import ParticipantInfoCard  from '../../components/ParticipantInfoCard';
+import Navbar               from '../../components/Navbar';
 
 export async function getServerSideProps({ params, req }) {
   const { subjectId } = params;
@@ -333,6 +334,7 @@ export default function DashboardPage({
               subjectId={subjectId}
               studySlug={studySlug || ''}
             />
+            <ParticipantInfoCard participantData={participant} />
           </section>
 
           {/* ── Progress tracker ── */}
