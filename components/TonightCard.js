@@ -6,6 +6,11 @@
  *
  * The "Description" column in the Phases tab drives the checklist.
  * Pipe-separated steps become interactive checkboxes (e.g. "Step 1|Step 2|Step 3").
+ * Each step can optionally have a link by using the format: "Step Title [URL]"
+ * Examples:
+ *   - "Setup device [https://example.com/setup]"
+ *   - "Check status [http://status.example.com]"
+ *   - "Review guidelines" (no link)
  * Checkoffs are persisted to the "Tonight Checklist" column on the Daily Status row
  * for today via /api/acknowledge.
  *
@@ -27,39 +32,79 @@ function todayLabel() {
   return new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
-// ── Checkbox sub-component ────────────────────────────────────────────────────
-function CheckItem({ label, checked, saving, onToggle }) {
+// Parse step text to extract label and optional URL
+// Formats supported:
+//   "Step Title" → { label: "Step Title", url: null }
+//   "Step Title [http://example.com]" → { label: "Step Title", url: "http://example.com" }
+//   "Step Title [https://example.com]" → { label: "Step Title", url: "https://example.com" }
+function parseStep(stepText) {
+  if (!stepText) return { label: '', url: null };
+
+  // Look for URL in square brackets at the end
+  const urlMatch = stepText.match(/\s*\[(https?:\/\/[^\]]+)\]\s*$/);
+
+  if (urlMatch) {
+    const url = urlMatch[1];
+    const label = stepText.substring(0, urlMatch.index).trim();
+    return { label, url };
+  }
+
+  return { label: stepText.trim(), url: null };
+}
+
+// ── Checkbox sub-component with optional link ────────────────────────────────
+function CheckItem({ label, url, checked, saving, onToggle }) {
   return (
-    <button
-      type="button"
-      onClick={onToggle}
-      disabled={saving}
+    <div
       className={`w-full flex items-start gap-3 text-left rounded-xl px-4 py-3 transition-colors
         ${checked
           ? 'bg-emerald-50 hover:bg-emerald-100'
           : 'bg-white/70 hover:bg-white'
         }
-        ${saving ? 'opacity-60 cursor-wait' : 'cursor-pointer'}
       `}
     >
-      {/* Checkbox circle */}
-      <span className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors
-        ${checked
-          ? 'bg-emerald-500 border-emerald-500'
-          : 'border-slate-300 bg-white'
-        }`}
+      {/* Checkbox button */}
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={saving}
+        className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition-colors
+          ${checked
+            ? 'bg-emerald-500 border-emerald-500'
+            : 'border-slate-300 bg-white hover:border-slate-400'
+          }
+          ${saving ? 'opacity-60 cursor-wait' : 'cursor-pointer'}
+        `}
       >
         {checked && (
           <svg className="w-3 h-3 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
           </svg>
         )}
-      </span>
+      </button>
 
-      <span className={`text-sm leading-snug ${checked ? 'text-emerald-800 line-through decoration-emerald-400' : 'text-slate-700'}`}>
-        {label}
-      </span>
-    </button>
+      {/* Label and optional link */}
+      <div className="flex-1 flex items-start gap-2 min-w-0">
+        <span className={`text-sm leading-snug flex-1 ${checked ? 'text-emerald-800 line-through decoration-emerald-400' : 'text-slate-700'}`}>
+          {label}
+        </span>
+        {url && (
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="mt-0.5 shrink-0 text-slate-400 hover:text-brand-600 transition-colors"
+            aria-label="Open link"
+            title="Open in new tab"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+          </a>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -224,10 +269,12 @@ export default function TonightCard({
 
           {rawSteps.map((step, i) => {
             const key = `step_${i}`;
+            const { label, url } = parseStep(step);
             return (
               <CheckItem
                 key={key}
-                label={step}
+                label={label}
+                url={url}
                 checked={checked.has(key)}
                 saving={saving === key}
                 onToggle={() => handleToggle(key)}
