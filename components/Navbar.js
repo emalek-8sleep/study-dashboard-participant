@@ -70,6 +70,18 @@ export default function Navbar({ studyName, subjectId, contactEmail, page = 'das
             <span className="font-mono font-medium text-slate-700">{subjectId}</span>
           </div>
 
+          {/* Refresh */}
+          <button
+            onClick={() => window.location.reload()}
+            className="p-2 rounded-lg hover:bg-slate-100 transition hidden sm:flex items-center justify-center shrink-0"
+            aria-label="Refresh page"
+            title="Refresh"
+          >
+            <svg className="w-4 h-4 text-slate-400 hover:text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </button>
+
           {/* Exit */}
           <a href="/api/logout"
             className="text-xs text-slate-400 hover:text-slate-600 transition font-medium hidden sm:block shrink-0">
@@ -117,7 +129,16 @@ export default function Navbar({ studyName, subjectId, contactEmail, page = 'das
               </>
             )}
 
-            <div className="pt-2 border-t border-slate-100 mt-2">
+            <div className="pt-2 border-t border-slate-100 mt-2 space-y-1">
+              <button
+                onClick={() => window.location.reload()}
+                className="w-full text-left px-3 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-lg flex items-center gap-2"
+              >
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Refresh
+              </button>
               <a href="/api/logout" className="block px-3 py-2 text-sm text-slate-500 hover:bg-slate-50 rounded-lg">
                 Exit Dashboard
               </a>
