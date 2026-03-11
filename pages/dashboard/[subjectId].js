@@ -107,6 +107,7 @@ export async function getServerSideProps({ params, req }) {
   // Set in Study Config tab:  show_full_history | true   and   show_tonight | false
   const showFullHistory = (config.show_full_history || '').toLowerCase() === 'true';
   const showTonight     = (config.show_tonight || 'true').toLowerCase() !== 'false';
+  const showParticipantInfo = (config.show_participant_info || 'true').toLowerCase() !== 'false';
 
   return {
     props: {
@@ -125,6 +126,7 @@ export async function getServerSideProps({ params, req }) {
       isBreakNight,
       showFullHistory,
       showTonight,
+      showParticipantInfo,
       initialAcknowledgments,
       initialTonightChecklist,
       todayStr,
@@ -148,6 +150,7 @@ export default function DashboardPage({
   isBreakNight,
   showFullHistory,
   showTonight,
+  showParticipantInfo,
   initialAcknowledgments,
   initialTonightChecklist,
   todayStr,
@@ -334,7 +337,7 @@ export default function DashboardPage({
               subjectId={subjectId}
               studySlug={studySlug || ''}
             />
-            <ParticipantInfoCard participantData={participant} />
+            {showParticipantInfo && <ParticipantInfoCard participantData={participant} />}
           </section>
 
           {/* ── Progress tracker ── */}
