@@ -305,6 +305,9 @@ export default function DashboardPage({
           {/* ── Shipping status ── */}
           <ShippingCard shipments={shipments} />
 
+          {/* ── Participant info ── */}
+          {showParticipantInfo && <ParticipantInfoCard participantData={participant} />}
+
           {/* ── Tonight's instructions ── */}
           {showTonight && (tonightInfo || isBreakNight) && (
             <section id="tonight">
@@ -337,7 +340,6 @@ export default function DashboardPage({
               subjectId={subjectId}
               studySlug={studySlug || ''}
             />
-            {showParticipantInfo && <ParticipantInfoCard participantData={participant} />}
           </section>
 
           {/* ── Progress tracker ── */}
