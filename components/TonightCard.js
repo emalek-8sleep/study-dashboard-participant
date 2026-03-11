@@ -6,11 +6,12 @@
  *
  * The "Description" column in the Phases tab drives the checklist.
  * Pipe-separated steps become interactive checkboxes (e.g. "Step 1|Step 2|Step 3").
- * Each step can optionally have a link by using the format: "Step Title [URL]"
+ * Each step can optionally have a link button using the format: "Step Title [URL]" or "Step Title [URL::Button Text]"
  * Examples:
- *   - "Setup device [https://example.com/setup]"
- *   - "Check status [http://status.example.com]"
- *   - "Review guidelines" (no link)
+ *   - "Setup device [https://example.com/setup]" → button says "Open"
+ *   - "Read documentation [https://docs.example.com::Learn More]" → button says "Learn More"
+ *   - "Review guidelines [http://guide.example.com::View Guide]" → button says "View Guide"
+ *   - "Prepare materials" (no link)
  * Checkoffs are persisted to the "Tonight Checklist" column on the Daily Status row
  * for today via /api/acknowledge.
  *
@@ -32,31 +33,34 @@ function todayLabel() {
   return new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 }
 
-// Parse step text to extract label and optional URL
+// Parse step text to extract label, URL, and optional button text
 // Formats supported:
-//   "Step Title" → { label: "Step Title", url: null }
-//   "Step Title [http://example.com]" → { label: "Step Title", url: "http://example.com" }
-//   "Step Title [https://example.com]" → { label: "Step Title", url: "https://example.com" }
+//   "Step Title" → { label: "Step Title", url: null, buttonText: null }
+//   "Step Title [http://example.com]" → { label: "Step Title", url: "http://example.com", buttonText: "Open" }
+//   "Step Title [https://example.com::Learn More]" → { label: "Step Title", url: "https://example.com", buttonText: "Learn More" }
 function parseStep(stepText) {
-  if (!stepText) return { label: '', url: null };
+  if (!stepText) return { label: '', url: null, buttonText: null };
 
-  // Look for URL in square brackets at the end
-  const urlMatch = stepText.match(/\s*\[(https?:\/\/[^\]]+)\]\s*$/);
+  // Look for URL (and optional button text) in square brackets at the end
+  // Format: [URL] or [URL::ButtonText]
+  const bracketMatch = stepText.match(/\s*\[(https?:\/\/[^\]:]+)(?:::([^\]]+))?\]\s*$/);
 
-  if (urlMatch) {
-    const url = urlMatch[1];
-    const label = stepText.substring(0, urlMatch.index).trim();
-    return { label, url };
+  if (bracketMatch) {
+    const url = bracketMatch[1];
+    const customButtonText = bracketMatch[2] ? bracketMatch[2].trim() : null;
+    const label = stepText.substring(0, bracketMatch.index).trim();
+    const buttonText = customButtonText || 'Open';
+    return { label, url, buttonText };
   }
 
-  return { label: stepText.trim(), url: null };
+  return { label: stepText.trim(), url: null, buttonText: null };
 }
 
-// ── Checkbox sub-component with optional link ────────────────────────────────
-function CheckItem({ label, url, checked, saving, onToggle }) {
+// ── Checkbox sub-component with optional link button ────────────────────────────
+function CheckItem({ label, url, buttonText, checked, saving, onToggle }) {
   return (
     <div
-      className={`w-full flex items-start gap-3 text-left rounded-xl px-4 py-3 transition-colors
+      className={`w-full flex items-center gap-3 text-left rounded-xl px-4 py-3 transition-colors
         ${checked
           ? 'bg-emerald-50 hover:bg-emerald-100'
           : 'bg-white/70 hover:bg-white'
@@ -83,27 +87,29 @@ function CheckItem({ label, url, checked, saving, onToggle }) {
         )}
       </button>
 
-      {/* Label and optional link */}
-      <div className="flex-1 flex items-start gap-2 min-w-0">
-        <span className={`text-sm leading-snug flex-1 ${checked ? 'text-emerald-800 line-through decoration-emerald-400' : 'text-slate-700'}`}>
-          {label}
-        </span>
-        {url && (
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
-            className="mt-0.5 shrink-0 text-slate-400 hover:text-brand-600 transition-colors"
-            aria-label="Open link"
-            title="Open in new tab"
-          >
-            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-            </svg>
-          </a>
-        )}
-      </div>
+      {/* Label */}
+      <span className={`text-sm leading-snug flex-1 ${checked ? 'text-emerald-800 line-through decoration-emerald-400' : 'text-slate-700'}`}>
+        {label}
+      </span>
+
+      {/* Optional link button (styled like ShippingCard track button) */}
+      {url && (
+        <a
+          href={url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`inline-flex items-center gap-1 text-xs font-semibold px-3 py-1.5 rounded-lg transition shrink-0 ${
+            checked
+              ? 'text-slate-400 hover:text-slate-600 bg-slate-100 hover:bg-slate-200'
+              : 'text-white bg-brand-600 hover:bg-brand-700'
+          }`}
+        >
+          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+          </svg>
+          {buttonText}
+        </a>
+      )}
     </div>
   );
 }
@@ -269,12 +275,13 @@ export default function TonightCard({
 
           {rawSteps.map((step, i) => {
             const key = `step_${i}`;
-            const { label, url } = parseStep(step);
+            const { label, url, buttonText } = parseStep(step);
             return (
               <CheckItem
                 key={key}
                 label={label}
                 url={url}
+                buttonText={buttonText}
                 checked={checked.has(key)}
                 saving={saving === key}
                 onToggle={() => handleToggle(key)}
