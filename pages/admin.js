@@ -455,6 +455,9 @@ function AdminDashboard({ studyName, summaries, stats, metrics, metricsSummary, 
             ))}
           </div>
 
+          {/* ── Study Status Assistant (persists across tabs) ── */}
+          <AdminChat stats={stats} metrics={metrics} activeSlug={activeSlug} />
+
           {/* ── DATA TAB ── */}
           {activeTab === 'data' && (
             <MetricsView
@@ -532,9 +535,6 @@ function AdminDashboard({ studyName, summaries, stats, metrics, metricsSummary, 
               </div>
             )}
           </div>
-
-          {/* ── Claude study status chat ── */}
-          <AdminChat stats={stats} metrics={metrics} activeSlug={activeSlug} />
 
           {/* ── Filters & search ── */}
           <div className="flex flex-col sm:flex-row gap-3">
