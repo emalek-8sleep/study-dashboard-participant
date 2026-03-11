@@ -16,7 +16,21 @@ export const config = {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end();
 
-  const { studyName, contactEmail, phases, checkinFields, setupSteps } = req.body;
+  const {
+    studyName,
+    studyShortName,
+    studyDescription,
+    contactEmail,
+    principalInvestigator,
+    phases,
+    checkinFields,
+    setupSteps,
+    importantInfo,
+    participantInfo,
+    hstIntegration,
+    verificationRequired,
+    verificationFieldColumn,
+  } = req.body;
 
   try {
     const XLSX = await import('xlsx');
@@ -26,15 +40,24 @@ export default async function handler(req, res) {
     // ── 1. Study Config ───────────────────────────────────────────────────────
     const configRows = [
       ['Key', 'Value'],
-      ['study_name',          studyName    || ''],
-      ['contact_email',       contactEmail || ''],
-      ['hst_upload_link',     ''],
-      ['verification_field',  ''],
-      ['admin_code',          ''],  // will be overridden by ADMIN_CODE env var
-      ['comments_script_url', ''],
+      ['study_name',             studyName             || ''],
+      ['study_short_name',       studyShortName        || ''],
+      ['study_description',      studyDescription      || ''],
+      ['contact_email',          contactEmail          || ''],
+      ['principal_investigator', principalInvestigator || ''],
+      ['hst_upload_link',        hstIntegration?.enabled ? '' : ''],
+      ['hst_upload_column',      hstIntegration?.uploadLinkColumn || ''],
+      ['verification_required',  verificationRequired ? 'true' : 'false'],
+      ['verification_field',     verificationFieldColumn || ''],
+      ['important_info_title',   importantInfo?.title   || ''],
+      ['important_info_content', importantInfo?.content || ''],
+      ['participant_info_title', participantInfo?.title || ''],
+      ['participant_info_content', participantInfo?.content || ''],
+      ['admin_code',             ''],  // will be overridden by ADMIN_CODE env var
+      ['comments_script_url',    ''],
     ];
     addSheet(XLSX, wb, 'Study Config', configRows, {
-      colWidths: [25, 50],
+      colWidths: [30, 70],
       headerStyle: true,
     });
 
@@ -75,14 +98,14 @@ export default async function handler(req, res) {
     // ── 4. Phases ─────────────────────────────────────────────────────────────
     const phasesHeader = [
       'Phase Number', 'Phase Name', 'Day Number', 'Day Label',
-      'Description', 'Goal', 'Status Column',
+      'Description', 'Goal', 'Condition', 'Status Column',
     ];
     const phasesRows = phaseDayCols.map((p) => [
       p.phaseNumber, p.phaseName, p.dayNumber, p.dayLabel,
-      p.description, p.goal, p.statusCol,
+      p.description, p.goal, p.condition || '', p.statusCol,
     ]);
     addSheet(XLSX, wb, 'Phases', [phasesHeader, ...phasesRows], {
-      colWidths: [14, 20, 12, 12, 40, 40, 30],
+      colWidths: [14, 20, 12, 12, 40, 40, 20, 30],
       headerStyle: true,
     });
 
@@ -103,8 +126,8 @@ export default async function handler(req, res) {
       f.fieldLabel  || '',
       f.columnName  || f.fieldLabel || '',
       f.invalidTips || '',
-      '',
-      '',
+      f.actionLabel || '',
+      f.actionUrl   || '',
     ]);
     addSheet(XLSX, wb, 'Check-in Fields', [checkinFieldsHeader, ...checkinFieldsRows], {
       colWidths: [25, 25, 45, 20, 25],

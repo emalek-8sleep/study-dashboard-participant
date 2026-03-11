@@ -20,12 +20,15 @@ const EMPTY_PHASE = () => ({
   durationDays: 7,
   description:  '',
   goal:         '',
+  condition:    '',
 });
 
 const EMPTY_FIELD = () => ({
   fieldLabel:   '',
   columnName:   '',
   invalidTips:  '',
+  actionLabel:  '',
+  actionUrl:    '',
 });
 
 const EMPTY_STEP = () => ({
@@ -43,11 +46,19 @@ export default function OnboardingPage() {
   const [error, setError]         = useState('');
   const [skippedAI, setSkippedAI] = useState(false);
   const [formData, setFormData]   = useState({
-    studyName:     '',
-    contactEmail:  '',
-    phases:        [{ ...EMPTY_PHASE() }],
-    checkinFields: [{ ...EMPTY_FIELD() }],
-    setupSteps:    [],
+    studyName:          '',
+    studyShortName:     '',
+    studyDescription:   '',
+    contactEmail:       '',
+    principalInvestigator: '',
+    phases:             [{ ...EMPTY_PHASE() }],
+    checkinFields:      [{ ...EMPTY_FIELD() }],
+    setupSteps:         [],
+    importantInfo:      { title: '', content: '' },
+    participantInfo:    { title: '', content: '' },
+    hstIntegration:     { enabled: false, uploadLinkColumn: '' },
+    verificationRequired: false,
+    verificationFieldColumn: '',
   });
 
   // Document inputs
@@ -160,19 +171,25 @@ export default function OnboardingPage() {
 
       // Merge extracted data into formData, keeping defaults for missing fields
       setFormData({
-        studyName:    data.studyName    || '',
-        contactEmail: data.contactEmail || '',
+        studyName:           data.studyName           || '',
+        studyShortName:      data.studyShortName      || '',
+        studyDescription:    data.studyDescription    || '',
+        contactEmail:        data.contactEmail        || '',
+        principalInvestigator: data.principalInvestigator || '',
         phases: (data.phases?.length ? data.phases : [EMPTY_PHASE()]).map((p, i) => ({
           phaseNumber:  p.phaseNumber  ?? i + 1,
           phaseName:    p.phaseName    || '',
           durationDays: p.durationDays || 7,
           description:  p.description  || '',
           goal:         p.goal         || '',
+          condition:    p.condition    || '',
         })),
         checkinFields: (data.checkinFields?.length ? data.checkinFields : [EMPTY_FIELD()]).map((f) => ({
           fieldLabel:  f.fieldLabel  || '',
           columnName:  f.columnName  || f.fieldLabel || '',
           invalidTips: f.invalidTips || '',
+          actionLabel: f.actionLabel || '',
+          actionUrl:   f.actionUrl   || '',
         })),
         setupSteps: (data.setupSteps || []).map((s, i) => ({
           stepNumber:  s.stepNumber  ?? i + 1,
@@ -180,6 +197,11 @@ export default function OnboardingPage() {
           description: s.description || '',
           tips:        s.tips        || '',
         })),
+        importantInfo:      data.importantInfo       || { title: '', content: '' },
+        participantInfo:    data.participantInfo     || { title: '', content: '' },
+        hstIntegration:     data.hstIntegration      || { enabled: false, uploadLinkColumn: '' },
+        verificationRequired: data.verificationRequired ?? false,
+        verificationFieldColumn: data.verificationFieldColumn || '',
       });
 
       setStep(2);
@@ -502,26 +524,62 @@ export default function OnboardingPage() {
               {/* Study Details */}
               <section className="card">
                 <h3 className="text-base font-bold text-slate-800 mb-4">Study Details</h3>
-                <div className="grid sm:grid-cols-2 gap-4">
+                <div className="space-y-4">
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1.5">Study Name *</label>
+                      <input
+                        type="text"
+                        value={formData.studyName}
+                        onChange={(e) => setFormData((p) => ({ ...p, studyName: e.target.value }))}
+                        placeholder="e.g. Full Moon Study"
+                        className="w-full px-3 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1.5">Short Name / Acronym</label>
+                      <input
+                        type="text"
+                        value={formData.studyShortName}
+                        onChange={(e) => setFormData((p) => ({ ...p, studyShortName: e.target.value }))}
+                        placeholder="e.g. FMS"
+                        className="w-full px-3 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
+                      />
+                    </div>
+                  </div>
+
                   <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Study Name</label>
-                    <input
-                      type="text"
-                      value={formData.studyName}
-                      onChange={(e) => setFormData((p) => ({ ...p, studyName: e.target.value }))}
-                      placeholder="e.g. Full Moon Study"
-                      className="w-full px-3 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
+                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Study Description</label>
+                    <textarea
+                      value={formData.studyDescription}
+                      onChange={(e) => setFormData((p) => ({ ...p, studyDescription: e.target.value }))}
+                      rows={2}
+                      placeholder="Brief overview of the study (1-2 sentences)"
+                      className="w-full px-3 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition resize-none"
                     />
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-slate-700 mb-1.5">Contact Email</label>
-                    <input
-                      type="email"
-                      value={formData.contactEmail}
-                      onChange={(e) => setFormData((p) => ({ ...p, contactEmail: e.target.value }))}
-                      placeholder="coordinator@eightsleep.com"
-                      className="w-full px-3 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
-                    />
+
+                  <div className="grid sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1.5">Principal Investigator</label>
+                      <input
+                        type="text"
+                        value={formData.principalInvestigator}
+                        onChange={(e) => setFormData((p) => ({ ...p, principalInvestigator: e.target.value }))}
+                        placeholder="PI name"
+                        className="w-full px-3 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-slate-700 mb-1.5">Contact Email *</label>
+                      <input
+                        type="email"
+                        value={formData.contactEmail}
+                        onChange={(e) => setFormData((p) => ({ ...p, contactEmail: e.target.value }))}
+                        placeholder="coordinator@example.com"
+                        className="w-full px-3 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
+                      />
+                    </div>
                   </div>
                 </div>
               </section>
@@ -550,8 +608,8 @@ export default function OnboardingPage() {
                           </button>
                         )}
                       </div>
-                      <div className="grid sm:grid-cols-3 gap-3 mb-3">
-                        <div className="sm:col-span-2">
+                      <div className="grid sm:grid-cols-2 gap-3 mb-3">
+                        <div>
                           <label className="block text-xs font-medium text-slate-600 mb-1">Phase Name</label>
                           <input type="text" value={phase.phaseName}
                             onChange={(e) => updatePhase(idx, 'phaseName', e.target.value)}
@@ -566,6 +624,14 @@ export default function OnboardingPage() {
                             className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
                           />
                         </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-slate-600 mb-1">Condition Tag <span className="text-slate-400 font-normal">(optional: for filtering)</span></label>
+                        <input type="text" value={phase.condition}
+                          onChange={(e) => updatePhase(idx, 'condition', e.target.value)}
+                          placeholder="e.g. Baseline, Testing, Washout"
+                          className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
+                        />
                       </div>
                       <div className="grid sm:grid-cols-2 gap-3">
                         <div>
@@ -646,6 +712,24 @@ export default function OnboardingPage() {
                           className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
                         />
                       </div>
+                      <div className="grid sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 mb-1">Action Label <span className="text-slate-400 font-normal">(if invalid)</span></label>
+                          <input type="text" value={field.actionLabel}
+                            onChange={(e) => updateField(idx, 'actionLabel', e.target.value)}
+                            placeholder='e.g. "Contact Sleep Specialist"'
+                            className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-medium text-slate-600 mb-1">Action URL <span className="text-slate-400 font-normal">(optional)</span></label>
+                          <input type="text" value={field.actionUrl}
+                            onChange={(e) => updateField(idx, 'actionUrl', e.target.value)}
+                            placeholder='e.g. contact-sleep-specialist'
+                            className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
+                          />
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -657,6 +741,154 @@ export default function OnboardingPage() {
                   </svg>
                   Add Field
                 </button>
+              </section>
+
+              {/* Important Info Card */}
+              <section className="card">
+                <div className="mb-4">
+                  <h3 className="text-base font-bold text-slate-800">Important Information <span className="text-slate-400 font-normal text-sm ml-1">(optional)</span></h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Key safety info or critical instructions shown to all participants on dashboard.</p>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Card Title</label>
+                    <input
+                      type="text"
+                      value={formData.importantInfo.title}
+                      onChange={(e) => setFormData((p) => ({
+                        ...p,
+                        importantInfo: { ...p.importantInfo, title: e.target.value }
+                      }))}
+                      placeholder="e.g. Safety Information"
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Content</label>
+                    <textarea
+                      value={formData.importantInfo.content}
+                      onChange={(e) => setFormData((p) => ({
+                        ...p,
+                        importantInfo: { ...p.importantInfo, content: e.target.value }
+                      }))}
+                      rows={3}
+                      placeholder="e.g. Contact support at support@example.com or call 1-800-XXX-XXXX"
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition resize-none"
+                    />
+                  </div>
+                </div>
+              </section>
+
+              {/* Participant Info Card */}
+              <section className="card">
+                <div className="mb-4">
+                  <h3 className="text-base font-bold text-slate-800">Participant Info <span className="text-slate-400 font-normal text-sm ml-1">(optional)</span></h3>
+                  <p className="text-xs text-slate-400 mt-0.5">Personalized info shown on each participant's dashboard.</p>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Card Title</label>
+                    <input
+                      type="text"
+                      value={formData.participantInfo.title}
+                      onChange={(e) => setFormData((p) => ({
+                        ...p,
+                        participantInfo: { ...p.participantInfo, title: e.target.value }
+                      }))}
+                      placeholder="e.g. Your Study Schedule"
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Content</label>
+                    <textarea
+                      value={formData.participantInfo.content}
+                      onChange={(e) => setFormData((p) => ({
+                        ...p,
+                        participantInfo: { ...p.participantInfo, content: e.target.value }
+                      }))}
+                      rows={3}
+                      placeholder="e.g. You're in Phase 2 Week 3. Expected completion date is [DATE]"
+                      className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition resize-none"
+                    />
+                  </div>
+                </div>
+              </section>
+
+              {/* HST & Verification */}
+              <section className="card">
+                <h3 className="text-base font-bold text-slate-800 mb-4">Integration Settings</h3>
+                <div className="space-y-4">
+                  <div className="border border-slate-100 rounded-lg p-4 bg-slate-50/50">
+                    <div className="flex items-start gap-3">
+                      <div className="flex-1">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.hstIntegration.enabled}
+                            onChange={(e) => setFormData((p) => ({
+                              ...p,
+                              hstIntegration: { ...p.hstIntegration, enabled: e.target.checked }
+                            }))}
+                            className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-2 focus:ring-brand-500"
+                          />
+                          <span className="text-sm font-medium text-slate-700">Enable HST Upload Integration</span>
+                        </label>
+                        <p className="text-xs text-slate-500 mt-2 ml-6">Participants can upload device data or files</p>
+                      </div>
+                    </div>
+                    {formData.hstIntegration.enabled && (
+                      <div className="mt-3 ml-6">
+                        <label className="block text-xs font-medium text-slate-600 mb-1">Upload Link Column Name</label>
+                        <input
+                          type="text"
+                          value={formData.hstIntegration.uploadLinkColumn}
+                          onChange={(e) => setFormData((p) => ({
+                            ...p,
+                            hstIntegration: { ...p.hstIntegration, uploadLinkColumn: e.target.value }
+                          }))}
+                          placeholder="e.g. HST Upload Link"
+                          className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
+                        />
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border border-slate-100 rounded-lg p-4 bg-slate-50/50">
+                    <div className="flex items-start gap-3">
+                      <div className="flex-1">
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={formData.verificationRequired}
+                            onChange={(e) => setFormData((p) => ({
+                              ...p,
+                              verificationRequired: e.target.checked
+                            }))}
+                            className="w-4 h-4 rounded border-slate-300 text-brand-600 focus:ring-2 focus:ring-brand-500"
+                          />
+                          <span className="text-sm font-medium text-slate-700">Require Verification Before Enrollment</span>
+                        </label>
+                        <p className="text-xs text-slate-500 mt-2 ml-6">Participants must complete verification step</p>
+                      </div>
+                    </div>
+                    {formData.verificationRequired && (
+                      <div className="mt-3 ml-6">
+                        <label className="block text-xs font-medium text-slate-600 mb-1">Verification Field Column</label>
+                        <input
+                          type="text"
+                          value={formData.verificationFieldColumn}
+                          onChange={(e) => setFormData((p) => ({
+                            ...p,
+                            verificationFieldColumn: e.target.value
+                          }))}
+                          placeholder="e.g. Verification Status"
+                          className="w-full px-3 py-2 rounded-lg border border-slate-200 focus:outline-none focus:ring-2 focus:ring-brand-500 text-slate-800 text-sm transition"
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
               </section>
 
               {/* Setup Steps (collapsible) */}
