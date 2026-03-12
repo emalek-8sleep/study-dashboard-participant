@@ -14,17 +14,14 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { id, study } = req.body || {};
+  const { id, study, readableTime: clientTime } = req.body || {};
 
   if (!id) {
     return res.status(400).json({ success: false, error: 'Missing required field: id' });
   }
 
-  const now = new Date();
-  const readableTime = now.toLocaleString('en-US', {
-    month: 'short', day: 'numeric', year: 'numeric',
-    hour: 'numeric', minute: '2-digit', hour12: true,
-  });
+  // Prefer client-provided time (local timezone) — fall back to server UTC if missing
+  const readableTime = clientTime || new Date().toISOString();
 
   console.log('[log-login] Recording login:', { id, study, readableTime });
 

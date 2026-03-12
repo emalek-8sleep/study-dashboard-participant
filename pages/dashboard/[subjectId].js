@@ -165,11 +165,16 @@ export default function DashboardPage({
   const commentsConfigured = !!(config.comments_script_url || '').trim();
 
   // Log login on page load — fire and forget, doesn't affect page rendering
+  // Readable time computed client-side so it reflects the user's local timezone
   useEffect(() => {
+    const readableTime = new Date().toLocaleString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric',
+      hour: 'numeric', minute: '2-digit', hour12: true,
+    });
     fetch('/api/log-login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: subjectId, study: studySlug }),
+      body: JSON.stringify({ id: subjectId, study: studySlug, readableTime }),
     }).catch(() => {}); // silently ignore errors
   }, [subjectId, studySlug]);
 
