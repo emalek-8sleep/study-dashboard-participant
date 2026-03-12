@@ -28,34 +28,49 @@ export default async function handler(req, res) {
   const config = await getStudyConfig();
   const scriptUrl = (config.comments_script_url || '').trim();
 
+  console.log('[comment] comments_script_url from config:', scriptUrl ? `${scriptUrl.slice(0, 60)}...` : '(empty)');
+
   if (!scriptUrl) {
+    console.log('[comment] No comments_script_url configured — returning 503');
     return res.status(503).json({ error: 'Comments are not yet configured for this study.' });
   }
+
+  const payload = {
+    subjectId: String(subjectId).trim(),
+    comment: comment.trim(),
+  };
+  console.log('[comment] Sending to Apps Script:', JSON.stringify(payload));
 
   try {
     const response = await fetch(scriptUrl, {
       method: 'POST',
       redirect: 'follow',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        subjectId: String(subjectId).trim(),
-        comment: comment.trim(),
-      }),
+      body: JSON.stringify(payload),
     });
+
+    console.log('[comment] Apps Script HTTP status:', response.status, response.statusText);
+    console.log('[comment] Final URL after redirects:', response.url);
 
     // Apps Script returns JSON — parse it
     const text = await response.text();
+    console.log('[comment] Raw Apps Script response:', text.slice(0, 500));
+
     let result = {};
-    try { result = JSON.parse(text); } catch { /* ignore parse errors */ }
+    try { result = JSON.parse(text); } catch (parseErr) {
+      console.error('[comment] JSON parse error:', parseErr.message, '| raw text:', text.slice(0, 200));
+    }
+
+    console.log('[comment] Parsed result:', JSON.stringify(result));
 
     if (result.success) {
       return res.status(200).json({ success: true });
     }
 
-    console.error('Apps Script error:', result);
+    console.error('[comment] Apps Script returned failure:', result);
     return res.status(500).json({ error: 'Failed to save your comment. Please try again.' });
   } catch (err) {
-    console.error('Comment submission error:', err);
+    console.error('[comment] Fetch/network error:', err.message, err.stack);
     return res.status(500).json({ error: 'Network error. Please try again.' });
   }
 }
