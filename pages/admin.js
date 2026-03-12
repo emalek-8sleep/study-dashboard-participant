@@ -104,8 +104,9 @@ export async function getServerSideProps({ req, query }) {
 
     return {
       id,
-      firstName:          p['First Name'] || '',
-      lastName:           p['Last Name']  || '',
+      firstName:          p['First Name']  || '',
+      lastName:           p['Last Name']   || '',
+      lastLogin:          p['Last Login']  || '',
       pct,
       completedDays,
       totalDays,
@@ -584,11 +585,12 @@ function AdminDashboard({ studyName, summaries, stats, metrics, metricsSummary, 
           <div className="hidden md:block bg-white rounded-2xl border border-slate-100 overflow-hidden">
             <div className="overflow-x-auto">
               <div className="min-w-[700px]">
-                <div className="grid grid-cols-[1fr_1fr_1fr_1fr_80px_80px] gap-4 px-5 py-3 bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr_80px_80px] gap-4 px-5 py-3 bg-slate-50 border-b border-slate-100 text-xs font-semibold text-slate-500 uppercase tracking-wide">
                   <span>Participant</span>
                   <span>Phase</span>
                   <span>Progress</span>
                   <span>Last Check-in</span>
+                  <span>Last Login</span>
                   <span>Issues</span>
                   <span>Questions</span>
                 </div>
@@ -1100,7 +1102,7 @@ function ParticipantRow({ s }) {
       href={`/dashboard/${encodeURIComponent(s.id)}`}
       target="_blank"
       rel="noopener noreferrer"
-      className="grid grid-cols-[1fr_1fr_1fr_1fr_80px_80px] gap-4 px-5 py-4 hover:bg-slate-50 transition items-center"
+      className="grid grid-cols-[1fr_1fr_1fr_1fr_1fr_80px_80px] gap-4 px-5 py-4 hover:bg-slate-50 transition items-center"
     >
       <div>
         <span className="text-sm font-semibold text-slate-800">{s.id}</span>
@@ -1146,6 +1148,10 @@ function ParticipantRow({ s }) {
             {s.checkinDate ? new Date(s.checkinDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '—'}
           </span>
         )}
+      </div>
+
+      <div>
+        <span className="text-xs text-slate-500">{s.lastLogin || '—'}</span>
       </div>
 
       <div>

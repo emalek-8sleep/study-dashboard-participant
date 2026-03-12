@@ -164,6 +164,15 @@ export default function DashboardPage({
   const todayStatus        = history[0] || null;
   const commentsConfigured = !!(config.comments_script_url || '').trim();
 
+  // Log login on page load — fire and forget, doesn't affect page rendering
+  useEffect(() => {
+    fetch('/api/log-login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: subjectId, study: studySlug }),
+    }).catch(() => {}); // silently ignore errors
+  }, [subjectId, studySlug]);
+
   // Attention: any check-in fields are invalid today
   const todayNeedsAttention = todayStatus &&
     checkinFields.some((f) => isInvalid(todayStatus[f['Column Name']] || ''));
