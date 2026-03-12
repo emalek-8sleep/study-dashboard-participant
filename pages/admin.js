@@ -476,10 +476,11 @@ function AdminDashboard({ studyName, summaries, stats, metrics, metricsSummary, 
 
           {/* ── ANALYSIS TAB ── */}
           {activeTab === 'analysis' && (
-            <AnalysisView
+            <AnalysisSection
               summaries={summaries}
               metrics={metrics}
               stats={stats}
+              checkinFieldCols={checkinFieldCols}
               activeSlug={activeSlug}
             />
           )}
@@ -1252,6 +1253,122 @@ function ParticipantCard({ s }) {
         </span>
       </div>
     </a>
+  );
+}
+
+// ─── AnalysisSection (sub-nav shell) ─────────────────────────────────────────
+
+const ANALYSIS_SUBNAV_KEY = (slug) => `analysis_subnav_${slug}`;
+
+function AnalysisSection({ summaries, metrics, stats, checkinFieldCols, activeSlug }) {
+  const [subTab, setSubTab] = useState(() => {
+    try { return localStorage.getItem(ANALYSIS_SUBNAV_KEY(activeSlug)) || 'charts'; } catch { return 'charts'; }
+  });
+
+  function switchSubTab(key) {
+    setSubTab(key);
+    try { localStorage.setItem(ANALYSIS_SUBNAV_KEY(activeSlug), key); } catch {}
+  }
+
+  const subTabs = [
+    { key: 'charts',    label: 'Charts' },
+    { key: 'plan',      label: 'Plan Generator' },
+    { key: 'run',       label: 'Run Analysis' },
+    { key: 'history',   label: 'History' },
+  ];
+
+  return (
+    <div className="space-y-5">
+      {/* Sub-nav */}
+      <div className="flex items-center gap-1 bg-white rounded-xl border border-slate-100 px-2 py-1.5 w-fit">
+        {subTabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => switchSubTab(t.key)}
+            className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition ${
+              subTab === t.key
+                ? 'bg-violet-600 text-white shadow-sm'
+                : 'text-slate-500 hover:text-slate-700 hover:bg-slate-50'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Sub-tab content */}
+      {subTab === 'charts' && (
+        <AnalysisView summaries={summaries} metrics={metrics} stats={stats} activeSlug={activeSlug} />
+      )}
+      {subTab === 'plan' && (
+        <AnalysisPlanGenerator metrics={metrics} summaries={summaries} checkinFieldCols={checkinFieldCols} activeSlug={activeSlug} />
+      )}
+      {subTab === 'run' && (
+        <AnalysisRunner metrics={metrics} summaries={summaries} checkinFieldCols={checkinFieldCols} activeSlug={activeSlug} />
+      )}
+      {subTab === 'history' && (
+        <AnalysisHistory activeSlug={activeSlug} />
+      )}
+    </div>
+  );
+}
+
+// ─── AnalysisPlanGenerator (placeholder) ─────────────────────────────────────
+
+function AnalysisPlanGenerator({ metrics, summaries, checkinFieldCols, activeSlug }) {
+  return (
+    <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center">
+      <div className="w-12 h-12 rounded-2xl bg-violet-50 flex items-center justify-center mx-auto mb-4">
+        <svg className="w-6 h-6 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+        </svg>
+      </div>
+      <h3 className="text-sm font-semibold text-slate-700 mb-1">Plan Generator — Coming Soon</h3>
+      <p className="text-xs text-slate-400 max-w-sm mx-auto">
+        Build structured analysis plans with IV/DV specification, hypothesis entry, and AI-powered statistical test recommendations.
+      </p>
+    </div>
+  );
+}
+
+// ─── AnalysisRunner (placeholder) ────────────────────────────────────────────
+
+function AnalysisRunner({ metrics, summaries, checkinFieldCols, activeSlug }) {
+  return (
+    <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center">
+      <div className="w-12 h-12 rounded-2xl bg-violet-50 flex items-center justify-center mx-auto mb-4">
+        <svg className="w-6 h-6 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+            d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+            d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </div>
+      <h3 className="text-sm font-semibold text-slate-700 mb-1">Run Analysis — Coming Soon</h3>
+      <p className="text-xs text-slate-400 max-w-sm mx-auto">
+        Select a plan, review descriptive stats and outliers by condition, then run analyses with interactive figures and downloadable reports.
+      </p>
+    </div>
+  );
+}
+
+// ─── AnalysisHistory (placeholder) ───────────────────────────────────────────
+
+function AnalysisHistory({ activeSlug }) {
+  return (
+    <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center">
+      <div className="w-12 h-12 rounded-2xl bg-violet-50 flex items-center justify-center mx-auto mb-4">
+        <svg className="w-6 h-6 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      </div>
+      <h3 className="text-sm font-semibold text-slate-700 mb-1">History — Coming Soon</h3>
+      <p className="text-xs text-slate-400 max-w-sm mx-auto">
+        Browse past analysis runs and their outputs, review saved plans, and upload reference DAPs that inform future plan generation.
+      </p>
+    </div>
   );
 }
 
