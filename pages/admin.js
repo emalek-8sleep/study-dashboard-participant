@@ -1972,25 +1972,772 @@ function OutlierChart({ col, descriptivesByVar, sdThreshold, conditions, removed
   );
 }
 
-// ─── AnalysisRunner (placeholder) ────────────────────────────────────────────
+// ─── AnalysisRunner ───────────────────────────────────────────────────────────
+
+// Simple markdown → HTML for interpretation panel (headings, bold, bullets)
+function renderMarkdown(md) {
+  if (!md) return '';
+  return md
+    .replace(/^## (.+)$/gm, '<h3 class="text-sm font-semibold text-slate-800 mt-5 mb-1">$1</h3>')
+    .replace(/^### (.+)$/gm, '<h4 class="text-xs font-semibold text-slate-700 mt-3 mb-1">$1</h4>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/^• (.+)$/gm, '<li class="ml-4 list-disc text-slate-600">$1</li>')
+    .replace(/^- (.+)$/gm, '<li class="ml-4 list-disc text-slate-600">$1</li>')
+    .replace(/\n\n/g, '</p><p class="text-xs text-slate-600 mb-2">')
+    .replace(/\n/g, ' ');
+}
 
 function AnalysisRunner({ metrics, summaries, checkinFieldCols, activeSlug }) {
-  return (
-    <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center">
-      <div className="w-12 h-12 rounded-2xl bg-violet-50 flex items-center justify-center mx-auto mb-4">
-        <svg className="w-6 h-6 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-            d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-            d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
+  const [phase,          setPhase]          = useState('select'); // select|review|code|running|results
+  const [plans,          setPlans]          = useState([]);
+  const [plansLoading,   setPlansLoading]   = useState(true);
+  const [selectedPlan,   setSelectedPlan]   = useState(null);
+  const [sdThreshold,    setSdThreshold]    = useState(2);
+  const [removedPoints,  setRemovedPoints]  = useState({});
+  const [generatedCode,  setGeneratedCode]  = useState('');
+  const [editableCode,   setEditableCode]   = useState('');
+  const [codeLoading,    setCodeLoading]    = useState(false);
+  const [runStatus,      setRunStatus]      = useState(''); // progress message
+  const [runResults,     setRunResults]     = useState(null); // { tests, assumptions, descriptives, stdout }
+  const [runError,       setRunError]       = useState('');
+  const [interpreting,   setInterpreting]   = useState(false);
+  const [interpretation, setInterpretation] = useState('');
+  const [saving,         setSaving]         = useState(false);
+  const [saved,          setSaved]          = useState(false);
+  const pyodideRef = useRef(null);
+
+  // ── Load saved plans on mount ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!activeSlug) return;
+    fetch(`/api/analysis/get-plans?study=${encodeURIComponent(activeSlug)}`)
+      .then(r => r.json())
+      .then(d => setPlans(d.plans || []))
+      .catch(() => setPlans([]))
+      .finally(() => setPlansLoading(false));
+  }, [activeSlug]);
+
+  // ── Derive outlier data from metrics + selected plan ──────────────────────
+  const allCols = metrics.length > 0
+    ? Object.keys(metrics[0]).filter(k => !INTERNAL_PLAN_COLS.has(k) && k !== 'Condition')
+    : [];
+  const numericCols = allCols.filter(col => {
+    const vals = metrics.map(r => r[col]).filter(v => v !== '' && v != null);
+    return vals.length > 0 && vals.some(v => !isNaN(Number(v)));
+  });
+  const conditions = [...new Set(metrics.map(r => (r['Condition'] || '').trim()).filter(Boolean))].sort();
+  const hasConditions = conditions.length > 0;
+
+  // DVs from plan or fallback to all numeric
+  const planDVs = selectedPlan
+    ? (selectedPlan.dv || '').split(/[,;]+/).map(s => s.trim()).filter(Boolean)
+    : [];
+  const analysedDVs = planDVs.length > 0 ? planDVs.filter(d => numericCols.includes(d)) : numericCols.slice(0, 4);
+
+  // Per-DV per-condition descriptives (reuse same logic as PlanGenerator)
+  const descriptivesByVar = {};
+  analysedDVs.forEach(col => {
+    descriptivesByVar[col] = {};
+    const condList = hasConditions ? conditions : ['All'];
+    condList.forEach(cond => {
+      const rows = metrics.filter(r => !hasConditions || (r['Condition'] || '').trim() === cond);
+      const vals = rows.map(r => ({
+        val: Number(r[col]),
+        subjectId: r['Subject ID'],
+        date: (r['Date'] || '').toString().split('T')[0],
+        raw: r[col],
+      })).filter(d => !isNaN(d.val) && d.raw !== '' && d.raw != null);
+      const stats = computeDescriptives(vals.map(d => d.val));
+      const outliers = {};
+      SD_THRESHOLDS.forEach(sd => {
+        if (!stats) return;
+        outliers[sd] = vals.filter(d => Math.abs(d.val - stats.mean) > sd * stats.sd);
+      });
+      descriptivesByVar[col][cond] = { stats, vals, outliers };
+    });
+  });
+
+  function isRemoved(col, cond, subjectId, date) {
+    return !!removedPoints[`${col}|${cond}|${subjectId}|${date}`];
+  }
+  function toggleRemove(col, cond, subjectId, date) {
+    const key = `${col}|${cond}|${subjectId}|${date}`;
+    setRemovedPoints(prev => ({ ...prev, [key]: !prev[key] }));
+  }
+  const totalRemoved = Object.values(removedPoints).filter(Boolean).length;
+
+  // ── Build filtered metrics for Pyodide ────────────────────────────────────
+  function getFilteredMetrics() {
+    return metrics.filter(row => {
+      for (const col of analysedDVs) {
+        for (const cond of (hasConditions ? conditions : ['All'])) {
+          const sid  = row['Subject ID'];
+          const date = (row['Date'] || '').toString().split('T')[0];
+          if (isRemoved(col, cond, sid, date)) return false;
+        }
+      }
+      return true;
+    });
+  }
+
+  // ── Load Pyodide (lazy, cached) ───────────────────────────────────────────
+  async function initPyodide() {
+    if (pyodideRef.current) return pyodideRef.current;
+    setRunStatus('Loading Python runtime (Pyodide)…');
+    await new Promise((resolve, reject) => {
+      if (typeof window.loadPyodide === 'function') return resolve();
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js';
+      script.onload  = resolve;
+      script.onerror = reject;
+      document.head.appendChild(script);
+    });
+    const pyodide = await window.loadPyodide();
+    setRunStatus('Installing scientific packages…');
+    await pyodide.loadPackage(['numpy', 'pandas', 'scipy', 'statsmodels']);
+    pyodideRef.current = pyodide;
+    return pyodide;
+  }
+
+  // ── Generate code from Claude Haiku ──────────────────────────────────────
+  async function handleGenerateCode() {
+    setCodeLoading(true);
+    setPhase('code');
+    try {
+      const res = await fetch('/api/analysis/generate-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plan: selectedPlan,
+          conditions,
+          availableColumns: numericCols,
+          n: metrics.length,
+          removedCount: totalRemoved,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Code generation failed');
+      setGeneratedCode(data.code);
+      setEditableCode(data.code);
+    } catch (err) {
+      setEditableCode(`# Error generating code: ${err.message}\n# Please write your analysis code here manually.\n\nimport json\nimport numpy as np\nimport pandas as pd\nfrom scipy import stats\n\nresults = {"tests": [], "assumptions": [], "descriptives": []}\nprint("RESULTS_JSON:" + json.dumps(results))\n`);
+    } finally {
+      setCodeLoading(false);
+    }
+  }
+
+  // ── Run analysis with Pyodide ─────────────────────────────────────────────
+  async function handleRunAnalysis() {
+    setPhase('running');
+    setRunError('');
+    setRunResults(null);
+    setInterpretation('');
+    setSaved(false);
+    let stdout = '';
+
+    try {
+      const pyodide = await initPyodide();
+      setRunStatus('Preparing data…');
+
+      // Pass filtered metrics as JSON → Python builds df
+      const filteredRows = getFilteredMetrics();
+      await pyodide.globals.set('_raw_data_json', JSON.stringify(filteredRows));
+
+      // Prefix: load df from the injected JSON
+      const dataPrefix = `
+import json as _json
+import pandas as _pd
+import io as _io
+import sys as _sys
+
+_data = _json.loads(_raw_data_json)
+df = _pd.DataFrame(_data)
+# Coerce numeric columns
+for _col in df.columns:
+    try:
+        df[_col] = _pd.to_numeric(df[_col], errors='ignore')
+    except Exception:
+        pass
+
+# Capture stdout
+_stdout_buf = _io.StringIO()
+_sys.stdout = _stdout_buf
+`;
+
+      const dataSuffix = `
+_sys.stdout = _sys.__stdout__
+_captured = _stdout_buf.getvalue()
+_captured
+`;
+
+      setRunStatus('Running analysis…');
+      const capturedOutput = await pyodide.runPythonAsync(dataPrefix + editableCode + dataSuffix);
+      stdout = capturedOutput || '';
+
+      // Parse RESULTS_JSON from output
+      let resultsJson = { tests: [], assumptions: [], descriptives: [] };
+      const marker = stdout.indexOf('RESULTS_JSON:');
+      if (marker !== -1) {
+        const jsonStr = stdout.slice(marker + 'RESULTS_JSON:'.length).trim();
+        try { resultsJson = JSON.parse(jsonStr); } catch { /* ignore */ }
+      }
+
+      setRunResults({ ...resultsJson, stdout });
+      setPhase('results');
+    } catch (err) {
+      // Restore stdout in case of error
+      try { await pyodideRef.current?.runPythonAsync('import sys; sys.stdout = sys.__stdout__'); } catch { /* ignore */ }
+      setRunError(err.message || 'Analysis failed');
+      setPhase('code');
+    }
+  }
+
+  // ── AI Interpretation ─────────────────────────────────────────────────────
+  async function handleInterpret() {
+    setInterpreting(true);
+    try {
+      const res = await fetch('/api/analysis/interpret', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plan: selectedPlan,
+          resultsJson: runResults,
+          removedCount: totalRemoved,
+          studySlug: activeSlug,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setInterpretation(data.interpretation);
+    } catch (err) {
+      setInterpretation(`*Error generating interpretation: ${err.message}*`);
+    } finally {
+      setInterpreting(false);
+    }
+  }
+
+  // ── Save run to history ───────────────────────────────────────────────────
+  async function handleSaveRun() {
+    setSaving(true);
+    try {
+      const reportHtml = buildReportHtml();
+      const res = await fetch('/api/analysis/save-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          planId:       selectedPlan?.id || '',
+          planTitle:    selectedPlan?.title || '',
+          study:        activeSlug,
+          codeUsed:     editableCode,
+          resultsJson:  runResults,
+          interpretation,
+          reportHtml,
+          status:       'completed',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setSaved(true);
+    } catch (err) {
+      alert(`Save failed: ${err.message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // ── Build HTML report ─────────────────────────────────────────────────────
+  function buildReportHtml() {
+    const ts = new Date().toLocaleString('en-US', { dateStyle: 'long', timeStyle: 'short' });
+    const tests = (runResults?.tests || []);
+    const assumptions = (runResults?.assumptions || []);
+    const descriptives = (runResults?.descriptives || []);
+
+    const descTable = descriptives.length > 0 ? `
+      <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%;font-size:12px">
+        <tr style="background:#f8fafc"><th>Variable</th><th>Condition</th><th>n</th><th>Mean</th><th>SD</th><th>Median</th><th>Min</th><th>Max</th></tr>
+        ${descriptives.map(d => `<tr><td>${d.variable}</td><td>${d.condition}</td><td>${d.n}</td><td>${d.mean?.toFixed(3)}</td><td>${d.sd?.toFixed(3)}</td><td>${d.median?.toFixed(3)}</td><td>${d.min?.toFixed(3)}</td><td>${d.max?.toFixed(3)}</td></tr>`).join('')}
+      </table>` : '<p>No descriptive statistics available.</p>';
+
+    const testRows = tests.map(t => `
+      <div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:12px;background:${t.significant ? '#f0fdf4' : '#f8fafc'}">
+        <b>${t.name}</b> <span style="color:${t.significant ? '#16a34a' : '#94a3b8'};font-size:12px">${t.significant ? '✓ Significant' : 'Not significant'}</span><br/>
+        <span style="font-size:12px;color:#475569">${t.details}</span><br/>
+        <span style="font-size:11px;color:#64748b">${t.direction}</span>
+      </div>`).join('');
+
+    const assumRows = assumptions.map(a => `
+      <tr>
+        <td>${a.test}</td><td>${a.variable}</td><td>${a.condition || '—'}</td>
+        <td style="color:${a.passed ? '#16a34a' : '#dc2626'}">${a.passed ? 'Passed' : 'Failed'}</td>
+        <td style="font-size:11px">${a.interpretation}</td>
+      </tr>`).join('');
+
+    const interpHtml = interpretation
+      ? `<h2>AI Interpretation</h2><div style="font-size:13px;line-height:1.7;color:#334155">${renderMarkdown(interpretation)}</div>`
+      : '';
+
+    return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><title>Analysis Report — ${selectedPlan?.title || activeSlug}</title>
+<style>body{font-family:system-ui,-apple-system,sans-serif;max-width:900px;margin:40px auto;padding:0 24px;color:#1e293b}
+h1{font-size:22px;font-weight:700;color:#0f172a;margin-bottom:4px}
+h2{font-size:16px;font-weight:600;color:#1e293b;border-bottom:1px solid #e2e8f0;padding-bottom:6px;margin-top:32px}
+table{width:100%;font-size:12px;border-collapse:collapse}th,td{padding:6px 10px;border:1px solid #e2e8f0;text-align:left}
+th{background:#f8fafc;font-weight:600}code{font-size:11px;background:#f1f5f9;padding:2px 5px;border-radius:3px}
+pre{background:#0f172a;color:#e2e8f0;padding:16px;border-radius:8px;font-size:11px;overflow-x:auto;white-space:pre-wrap}
+.meta{font-size:12px;color:#64748b;margin-bottom:24px}.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.sig{background:#dcfce7;color:#15803d}.ns{background:#f1f5f9;color:#64748b}</style></head>
+<body>
+<h1>Analysis Report</h1>
+<div class="meta">
+  <b>Plan:</b> ${selectedPlan?.title || '—'} &nbsp;|&nbsp;
+  <b>Study:</b> ${activeSlug} &nbsp;|&nbsp;
+  <b>Generated:</b> ${ts}<br/>
+  <b>Design:</b> ${selectedPlan?.design || '—'} &nbsp;|&nbsp;
+  <b>IV:</b> ${selectedPlan?.iv || '—'} &nbsp;|&nbsp;
+  <b>DVs:</b> ${selectedPlan?.dv || '—'}<br/>
+  ${totalRemoved > 0 ? `<b>Excluded data points:</b> ${totalRemoved}` : ''}
+</div>
+
+<h2>Descriptive Statistics</h2>
+${descTable}
+
+<h2>Statistical Test Results</h2>
+${testRows || '<p>No test results.</p>'}
+
+<h2>Assumption Checks</h2>
+${assumptions.length > 0 ? `<table><tr><th>Test</th><th>Variable</th><th>Condition</th><th>Result</th><th>Interpretation</th></tr>${assumRows}</table>` : '<p>No assumption checks.</p>'}
+
+${interpHtml}
+
+<h2>Python Code</h2>
+<pre>${editableCode.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+
+<h2>Raw Output</h2>
+<pre>${(runResults?.stdout || '').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>
+</body></html>`;
+  }
+
+  // ── Download HTML report ──────────────────────────────────────────────────
+  function handleDownloadReport() {
+    const html = buildReportHtml();
+    const blob = new Blob([html], { type: 'text/html' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `analysis-report-${activeSlug}-${Date.now()}.html`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────────────────────────────────
+
+  // Phase: SELECT PLAN
+  if (phase === 'select') {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-sm font-semibold text-slate-800">Run Analysis</h2>
+            <p className="text-xs text-slate-400 mt-0.5">Select a saved analysis plan to get started</p>
+          </div>
+        </div>
+
+        {plansLoading ? (
+          <div className="flex items-center gap-2 py-8 justify-center text-xs text-slate-400">
+            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" className="opacity-25"/>
+              <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="2" className="opacity-75"/>
+            </svg>
+            Loading plans…
+          </div>
+        ) : plans.length === 0 ? (
+          <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-10 text-center">
+            <p className="text-sm font-medium text-slate-600 mb-1">No analysis plans yet</p>
+            <p className="text-xs text-slate-400">Create a plan in the Plan Generator tab first.</p>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {plans.map((p, i) => (
+              <div key={i}
+                onClick={() => { setSelectedPlan(p); setPhase('review'); setRemovedPoints({}); }}
+                className="bg-white border border-slate-200 rounded-xl px-4 py-3 cursor-pointer hover:border-violet-300 hover:bg-violet-50 transition-all group"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-800 truncate">{p.title || 'Untitled Plan'}</p>
+                    <p className="text-xs text-slate-500 mt-0.5">{p.design} · IV: {p.iv} · DVs: {p.dv}</p>
+                  </div>
+                  <div className="flex-shrink-0 flex items-center gap-2">
+                    <span className="text-xs text-slate-400">{p.createdAt ? new Date(p.createdAt).toLocaleDateString() : ''}</span>
+                    <svg className="w-4 h-4 text-slate-300 group-hover:text-violet-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/>
+                    </svg>
+                  </div>
+                </div>
+                {p.statisticalTests && (
+                  <p className="text-xs text-slate-400 mt-1 truncate">Tests: {p.statisticalTests}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
-      <h3 className="text-sm font-semibold text-slate-700 mb-1">Run Analysis — Coming Soon</h3>
-      <p className="text-xs text-slate-400 max-w-sm mx-auto">
-        Select a plan, review descriptive stats and outliers by condition, then run analyses with interactive figures and downloadable reports.
-      </p>
-    </div>
-  );
+    );
+  }
+
+  // Phase: REVIEW DATA
+  if (phase === 'review') {
+    return (
+      <div className="space-y-5">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <button onClick={() => setPhase('select')} className="text-xs text-violet-500 hover:text-violet-700 mb-1 flex items-center gap-1">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>
+              Back to plans
+            </button>
+            <h2 className="text-sm font-semibold text-slate-800">{selectedPlan?.title || 'Review Data'}</h2>
+            <p className="text-xs text-slate-500 mt-0.5">{selectedPlan?.design} · IV: {selectedPlan?.iv} · DVs: {selectedPlan?.dv}</p>
+          </div>
+          <button onClick={handleGenerateCode}
+            className="flex-shrink-0 px-4 py-2 bg-violet-500 hover:bg-violet-600 text-white rounded-xl text-xs font-semibold transition-colors">
+            Generate Code →
+          </button>
+        </div>
+
+        {/* SD threshold toggle */}
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-slate-500">Show outliers at:</span>
+          {SD_THRESHOLDS.map(sd => (
+            <button key={sd} onClick={() => setSdThreshold(sd)}
+              className={`px-3 py-1 rounded-full text-xs font-semibold transition-colors ${sdThreshold === sd ? 'bg-violet-500 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}>
+              {sd}σ
+            </button>
+          ))}
+          {totalRemoved > 0 && (
+            <span className="ml-3 text-xs text-amber-600 font-medium">{totalRemoved} point{totalRemoved !== 1 ? 's' : ''} excluded</span>
+          )}
+        </div>
+
+        {/* Per-DV per-condition descriptive stats + outlier charts */}
+        {analysedDVs.length === 0 ? (
+          <p className="text-xs text-slate-400">No numeric columns found matching this plan's DVs.</p>
+        ) : (
+          analysedDVs.map(col => (
+            <div key={col} className="bg-white border border-slate-200 rounded-2xl p-4 space-y-3">
+              <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wide">{col}</h3>
+              {(hasConditions ? conditions : ['All']).map(cond => {
+                const entry = descriptivesByVar[col]?.[cond];
+                if (!entry) return null;
+                const { stats, vals, outliers } = entry;
+                const outlierSet = new Set((outliers[sdThreshold] || []).map(d => `${d.subjectId}|${d.date}`));
+                const removedVals = vals.filter(d => isRemoved(col, cond, d.subjectId, d.date));
+                return (
+                  <div key={cond} className="border border-slate-100 rounded-xl p-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-semibold text-slate-600">{cond}</span>
+                      {removedVals.length > 0 && (
+                        <span className="text-xs text-amber-600">{removedVals.length} excluded</span>
+                      )}
+                    </div>
+                    {stats && (
+                      <div className="grid grid-cols-5 gap-2">
+                        {[['n', stats.n], ['Mean', stats.mean?.toFixed(2)], ['SD', stats.sd?.toFixed(2)], ['Median', stats.median?.toFixed(2)], ['Range', `${stats.min?.toFixed(1)}–${stats.max?.toFixed(1)}`]].map(([label, val]) => (
+                          <div key={label} className="bg-slate-50 rounded-lg px-2 py-1.5 text-center">
+                            <div className="text-[10px] text-slate-400">{label}</div>
+                            <div className="text-xs font-semibold text-slate-700">{val}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <OutlierChart
+                      col={col} cond={cond} vals={vals} stats={stats}
+                      sdThreshold={sdThreshold} isRemoved={isRemoved} onToggleRemove={toggleRemove}
+                    />
+                    {/* Outlier list */}
+                    {(outliers[sdThreshold] || []).length > 0 && (
+                      <div className="space-y-1">
+                        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">
+                          {(outliers[sdThreshold] || []).length} outlier{(outliers[sdThreshold] || []).length !== 1 ? 's' : ''} at {sdThreshold}σ
+                        </p>
+                        {(outliers[sdThreshold] || []).map((d, i) => {
+                          const removed = isRemoved(col, cond, d.subjectId, d.date);
+                          return (
+                            <div key={i} className={`flex items-center justify-between px-3 py-1.5 rounded-lg text-xs ${removed ? 'bg-slate-50 opacity-50' : 'bg-red-50'}`}>
+                              <span className={removed ? 'text-slate-400 line-through' : 'text-slate-700'}>
+                                {d.subjectId} · {d.date} · <strong>{d.val?.toFixed(3)}</strong>
+                                <span className="text-slate-400 ml-1">({Math.abs(d.val - stats.mean) / stats.sd > 0 ? `${(Math.abs(d.val - stats.mean) / stats.sd).toFixed(1)}σ` : ''})</span>
+                              </span>
+                              <button onClick={() => toggleRemove(col, cond, d.subjectId, d.date)}
+                                className={`ml-3 text-[10px] font-semibold px-2 py-0.5 rounded-full transition-colors ${removed ? 'bg-slate-200 text-slate-500 hover:bg-green-100 hover:text-green-700' : 'bg-red-100 text-red-600 hover:bg-red-200'}`}>
+                                {removed ? 'Restore' : 'Exclude'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          ))
+        )}
+      </div>
+    );
+  }
+
+  // Phase: CODE
+  if (phase === 'code') {
+    return (
+      <div className="space-y-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <button onClick={() => setPhase('review')} className="text-xs text-violet-500 hover:text-violet-700 mb-1 flex items-center gap-1">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>
+              Back to review
+            </button>
+            <h2 className="text-sm font-semibold text-slate-800">Analysis Code</h2>
+            <p className="text-xs text-slate-500 mt-0.5">Review and edit before running · <code className="bg-slate-100 px-1 rounded">df</code> is pre-loaded as a pandas DataFrame</p>
+          </div>
+          <button onClick={handleRunAnalysis} disabled={!editableCode || codeLoading}
+            className="flex-shrink-0 px-4 py-2 bg-violet-500 hover:bg-violet-600 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-xl text-xs font-semibold transition-colors">
+            ▶ Run Analysis
+          </button>
+        </div>
+
+        {codeLoading ? (
+          <div className="flex items-center gap-2 py-6 text-xs text-slate-400 justify-center">
+            <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" className="opacity-25"/>
+              <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="2" className="opacity-75"/>
+            </svg>
+            Generating code…
+          </div>
+        ) : (
+          <div className="relative">
+            <textarea
+              value={editableCode}
+              onChange={e => setEditableCode(e.target.value)}
+              className="w-full h-[480px] bg-slate-900 text-emerald-300 font-mono text-xs rounded-2xl p-4 resize-none border-0 outline-none focus:ring-2 focus:ring-violet-400"
+              spellCheck={false}
+              placeholder="# Python code will appear here…"
+            />
+            <button onClick={() => setEditableCode(generatedCode)}
+              className="absolute top-3 right-3 text-[10px] text-slate-500 bg-slate-800 hover:bg-slate-700 px-2 py-1 rounded-md transition-colors">
+              Reset
+            </button>
+          </div>
+        )}
+
+        {runError && (
+          <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-xs text-red-700">
+            <strong>Error:</strong> {runError}
+          </div>
+        )}
+
+        {totalRemoved > 0 && (
+          <div className="text-xs text-amber-600 bg-amber-50 rounded-xl px-3 py-2">
+            ⚠ {totalRemoved} data point{totalRemoved !== 1 ? 's' : ''} excluded from analysis (rows already filtered before passing to Python).
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Phase: RUNNING
+  if (phase === 'running') {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-4">
+        <div className="w-12 h-12 rounded-full bg-violet-100 flex items-center justify-center">
+          <svg className="w-6 h-6 text-violet-500 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" className="opacity-25"/>
+            <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="2" className="opacity-75"/>
+          </svg>
+        </div>
+        <p className="text-sm font-semibold text-slate-700">{runStatus || 'Running…'}</p>
+        <p className="text-xs text-slate-400">Running Python in your browser via Pyodide</p>
+      </div>
+    );
+  }
+
+  // Phase: RESULTS
+  if (phase === 'results' && runResults) {
+    const tests       = runResults.tests || [];
+    const assumptions = runResults.assumptions || [];
+    const descriptives = runResults.descriptives || [];
+
+    return (
+      <div className="space-y-5">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <button onClick={() => setPhase('code')} className="text-xs text-violet-500 hover:text-violet-700 mb-1 flex items-center gap-1">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/></svg>
+              Back to code
+            </button>
+            <h2 className="text-sm font-semibold text-slate-800">Results — {selectedPlan?.title}</h2>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={handleDownloadReport}
+              className="px-3 py-1.5 bg-white border border-slate-200 hover:border-violet-300 text-slate-600 hover:text-violet-600 rounded-xl text-xs font-semibold transition-colors">
+              ↓ Download Report
+            </button>
+            <button onClick={handleSaveRun} disabled={saving || saved}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-colors ${saved ? 'bg-green-100 text-green-700 border border-green-200' : 'bg-violet-500 hover:bg-violet-600 text-white'}`}>
+              {saved ? '✓ Saved' : saving ? 'Saving…' : 'Save to History'}
+            </button>
+          </div>
+        </div>
+
+        {/* Assumption checks */}
+        {assumptions.length > 0 && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-4">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Assumption Checks</h3>
+            <div className="space-y-1.5">
+              {assumptions.map((a, i) => (
+                <div key={i} className={`flex items-start justify-between gap-3 px-3 py-2 rounded-lg text-xs ${a.passed ? 'bg-green-50' : 'bg-amber-50'}`}>
+                  <div>
+                    <span className="font-semibold text-slate-700">{a.test}</span>
+                    <span className="text-slate-400 ml-2">{a.variable}{a.condition ? ` [${a.condition}]` : ''}</span>
+                    <span className="text-slate-500 ml-2">{a.interpretation}</span>
+                  </div>
+                  <span className={`flex-shrink-0 font-bold ${a.passed ? 'text-green-600' : 'text-amber-600'}`}>
+                    {a.passed ? '✓ Passed' : '⚠ Failed'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Main test results */}
+        {tests.length > 0 && (
+          <div className="space-y-4">
+            {tests.map((t, i) => (
+              <div key={i} className="bg-white border border-slate-200 rounded-2xl p-4">
+                <div className="flex items-start justify-between gap-3 mb-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-slate-800">{t.name}</h3>
+                    <p className="text-xs text-slate-500 mt-0.5">{t.details}</p>
+                    {t.direction && <p className="text-xs text-slate-600 mt-0.5 font-medium">{t.direction}</p>}
+                  </div>
+                  <span className={`flex-shrink-0 px-3 py-1 rounded-full text-xs font-bold ${t.significant ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
+                    {t.significant ? `p = ${t.pValue?.toFixed(3)}` : `p = ${t.pValue?.toFixed(3)} ns`}
+                  </span>
+                </div>
+                {/* Bar chart: mean per condition */}
+                {(t.chartData || []).length > 0 && (
+                  <ResponsiveContainer width="100%" height={180}>
+                    <BarChart data={t.chartData} margin={{ top: 4, right: 16, left: -20, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                      <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#64748b' }} tickLine={false} />
+                      <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} />
+                      <Tooltip
+                        content={({ active, payload }) => {
+                          if (!active || !payload?.length) return null;
+                          const d = payload[0].payload;
+                          return (
+                            <div className="bg-white border border-slate-200 rounded-lg shadow-sm px-3 py-2 text-xs">
+                              <p className="font-semibold text-slate-700">{d.label}</p>
+                              <p>M = {d.mean?.toFixed(3)}, SD = {d.sd?.toFixed(3)}</p>
+                              <p className="text-slate-400">n = {d.n}</p>
+                            </div>
+                          );
+                        }}
+                      />
+                      <Bar dataKey="mean" radius={[6, 6, 0, 0]}>
+                        {(t.chartData || []).map((_, ci) => (
+                          <Cell key={ci} fill={['#8b5cf6', '#06b6d4', '#f59e0b', '#10b981', '#ef4444'][ci % 5]} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                )}
+                {t.effectSize != null && (
+                  <p className="text-xs text-slate-400 mt-2">Effect size: {t.effectSizeType} = {t.effectSize?.toFixed(3)}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Descriptives table */}
+        {descriptives.length > 0 && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-4">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Descriptive Statistics</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-100">
+                    {['Variable', 'Condition', 'n', 'Mean', 'SD', 'Median', 'Min', 'Max'].map(h => (
+                      <th key={h} className="text-left pb-2 pr-4 text-slate-400 font-semibold">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {descriptives.map((d, i) => (
+                    <tr key={i} className="border-b border-slate-50">
+                      <td className="py-1.5 pr-4 font-medium text-slate-700">{d.variable}</td>
+                      <td className="py-1.5 pr-4 text-slate-500">{d.condition}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{d.n}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{d.mean?.toFixed(3)}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{d.sd?.toFixed(3)}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{d.median?.toFixed(3)}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{d.min?.toFixed(3)}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{d.max?.toFixed(3)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* AI Interpretation */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide">AI Interpretation</h3>
+            {!interpretation && !interpreting && (
+              <button onClick={handleInterpret}
+                className="px-3 py-1.5 bg-violet-50 hover:bg-violet-100 text-violet-600 rounded-lg text-xs font-semibold transition-colors">
+                ✦ Get Interpretation
+              </button>
+            )}
+          </div>
+          {interpreting ? (
+            <div className="flex items-center gap-2 py-4 text-xs text-slate-400">
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" className="opacity-25"/>
+                <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="2" className="opacity-75"/>
+              </svg>
+              Interpreting results…
+            </div>
+          ) : interpretation ? (
+            <div className="text-xs leading-relaxed text-slate-600 space-y-1"
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(interpretation) }} />
+          ) : (
+            <p className="text-xs text-slate-400 italic">Click "Get Interpretation" to have Claude Sonnet interpret these results.</p>
+          )}
+        </div>
+
+        {/* Raw output (collapsible) */}
+        {runResults.stdout && (
+          <details className="bg-white border border-slate-200 rounded-2xl">
+            <summary className="px-4 py-3 text-xs font-semibold text-slate-500 cursor-pointer select-none">
+              Raw Python Output
+            </summary>
+            <pre className="px-4 pb-4 text-[10px] font-mono text-emerald-400 bg-slate-900 rounded-b-2xl overflow-x-auto whitespace-pre-wrap max-h-48">
+              {runResults.stdout}
+            </pre>
+          </details>
+        )}
+      </div>
+    );
+  }
+
+  return null;
 }
 
 // ─── AnalysisHistory (placeholder) ───────────────────────────────────────────
