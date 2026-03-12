@@ -14,6 +14,10 @@
 
 import Head    from 'next/head';
 import { useState, useRef, useEffect } from 'react';
+import {
+  LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer, Cell, Legend,
+} from 'recharts';
 
 // ─── Server-side ─────────────────────────────────────────────────────────────
 
@@ -441,6 +445,7 @@ function AdminDashboard({ studyName, summaries, stats, metrics, metricsSummary, 
             {[
               { key: 'overview', label: 'Overview' },
               { key: 'data',     label: `Data${metrics.length > 0 ? ` (${metrics.length})` : ''}` },
+              { key: 'analysis', label: 'Analysis' },
             ].map((tab) => (
               <button
                 key={tab.key}
@@ -465,6 +470,16 @@ function AdminDashboard({ studyName, summaries, stats, metrics, metricsSummary, 
               metrics={metrics}
               metricsSummary={metricsSummary}
               checkinFieldCols={checkinFieldCols}
+              activeSlug={activeSlug}
+            />
+          )}
+
+          {/* ── ANALYSIS TAB ── */}
+          {activeTab === 'analysis' && (
+            <AnalysisView
+              summaries={summaries}
+              metrics={metrics}
+              stats={stats}
               activeSlug={activeSlug}
             />
           )}
@@ -1237,6 +1252,298 @@ function ParticipantCard({ s }) {
         </span>
       </div>
     </a>
+  );
+}
+
+// ─── AnalysisView ─────────────────────────────────────────────────────────────
+
+function AnalysisView({ summaries, metrics, stats, activeSlug }) {
+  // ── Compliance over time ─────────────────────────────────────────────────
+  // Group metrics by date, count unique participants with data each day
+  const totalParticipants = summaries.length;
+  const byDate = {};
+  metrics.forEach((m) => {
+    const date = (m['Date'] || '').toString().split('T')[0];
+    if (!date) return;
+    if (!byDate[date]) byDate[date] = new Set();
+    byDate[date].add(m['Subject ID']);
+  });
+  const complianceData = Object.entries(byDate)
+    .sort(([a], [b]) => a.localeCompare(b))
+    .slice(-30) // last 30 days
+    .map(([date, ids]) => ({
+      date: new Date(date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+      pct:  totalParticipants > 0 ? Math.round((ids.size / totalParticipants) * 100) : 0,
+      n:    ids.size,
+    }));
+
+  // ── Check-in field pass rates ────────────────────────────────────────────
+  const fieldData = (stats.fieldStats || []).map(({ label, valid, invalid, noData }) => {
+    const total = valid + invalid + noData;
+    return {
+      name:    label,
+      pass:    valid,
+      fail:    invalid,
+      noData,
+      passPct: total > 0 ? Math.round((valid / total) * 100) : 0,
+    };
+  });
+
+  // ── Progress distribution ────────────────────────────────────────────────
+  const buckets = { '0–24%': 0, '25–49%': 0, '50–74%': 0, '75–99%': 0, '100%': 0 };
+  summaries.forEach(({ pct }) => {
+    if (pct === 100)      buckets['100%']++;
+    else if (pct >= 75)   buckets['75–99%']++;
+    else if (pct >= 50)   buckets['50–74%']++;
+    else if (pct >= 25)   buckets['25–49%']++;
+    else                  buckets['0–24%']++;
+  });
+  const progressData = Object.entries(buckets).map(([name, value]) => ({ name, value }));
+  const PROGRESS_COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6'];
+
+  return (
+    <div className="space-y-6">
+
+      {/* ── Charts row ── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        {/* Compliance over time */}
+        <div className="bg-white rounded-2xl border border-slate-100 p-5">
+          <h3 className="text-sm font-semibold text-slate-700 mb-1">Daily Compliance (last 30 days)</h3>
+          <p className="text-xs text-slate-400 mb-4">% of participants who submitted data each day</p>
+          {complianceData.length === 0 ? (
+            <div className="flex items-center justify-center h-40 text-xs text-slate-400">No data yet</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={complianceData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} interval="preserveStartEnd" />
+                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} domain={[0, 100]} unit="%" />
+                <Tooltip
+                  formatter={(v, _, props) => [`${v}% (${props.payload.n} participants)`, 'Compliance']}
+                  contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e2e8f0' }}
+                />
+                <Line type="monotone" dataKey="pct" stroke="#6366f1" strokeWidth={2} dot={false} activeDot={{ r: 4 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        {/* Progress distribution */}
+        <div className="bg-white rounded-2xl border border-slate-100 p-5">
+          <h3 className="text-sm font-semibold text-slate-700 mb-1">Participant Progress Distribution</h3>
+          <p className="text-xs text-slate-400 mb-4">How far along each participant is in the study</p>
+          {summaries.length === 0 ? (
+            <div className="flex items-center justify-center h-40 text-xs text-slate-400">No data yet</div>
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={progressData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} allowDecimals={false} />
+                <Tooltip
+                  formatter={(v) => [v, 'Participants']}
+                  contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e2e8f0' }}
+                />
+                <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                  {progressData.map((_, i) => (
+                    <Cell key={i} fill={PROGRESS_COLORS[i % PROGRESS_COLORS.length]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          )}
+        </div>
+
+        {/* Check-in field pass rates */}
+        {fieldData.length > 0 && (
+          <div className="bg-white rounded-2xl border border-slate-100 p-5 lg:col-span-2">
+            <h3 className="text-sm font-semibold text-slate-700 mb-1">Check-in Field Results (last night)</h3>
+            <p className="text-xs text-slate-400 mb-4">Pass vs fail vs no data per field</p>
+            <ResponsiveContainer width="100%" height={200}>
+              <BarChart data={fieldData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                <XAxis dataKey="name" tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} />
+                <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} allowDecimals={false} />
+                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e2e8f0' }} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="pass"   name="Pass"    stackId="a" fill="#22c55e" radius={[0, 0, 0, 0]} />
+                <Bar dataKey="fail"   name="Fail"    stackId="a" fill="#ef4444" />
+                <Bar dataKey="noData" name="No Data" stackId="a" fill="#e2e8f0" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        )}
+      </div>
+
+      {/* ── AI Analysis Chat ── */}
+      <AnalysisChat summaries={summaries} metrics={metrics} stats={stats} activeSlug={activeSlug} />
+    </div>
+  );
+}
+
+// ─── AnalysisChat ─────────────────────────────────────────────────────────────
+
+const ANALYSIS_STORAGE_KEY = (slug) => `analysis_chat_${slug}`;
+
+const INITIAL_MESSAGE = {
+  role: 'assistant',
+  content: "Hey! I can help you dig into your study data — trends, outliers, compliance patterns, anything you want to explore. What would you like to know?",
+};
+
+function AnalysisChat({ summaries, metrics, stats, activeSlug }) {
+  const [messages, setMessages] = useState([INITIAL_MESSAGE]);
+  const [input,    setInput]    = useState('');
+  const [loading,  setLoading]  = useState(false);
+  const [hydrated, setHydrated] = useState(false);
+  const bottomRef               = useRef(null);
+
+  // Load persisted history on mount
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(ANALYSIS_STORAGE_KEY(activeSlug));
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setMessages(parsed);
+        }
+      }
+    } catch {}
+    setHydrated(true);
+  }, [activeSlug]);
+
+  // Persist history on every change (after hydration)
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      localStorage.setItem(ANALYSIS_STORAGE_KEY(activeSlug), JSON.stringify(messages));
+    } catch {}
+  }, [messages, activeSlug, hydrated]);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
+
+  function clearHistory() {
+    setMessages([INITIAL_MESSAGE]);
+    try { localStorage.removeItem(ANALYSIS_STORAGE_KEY(activeSlug)); } catch {}
+  }
+
+  async function handleSend(e) {
+    e.preventDefault();
+    const text = input.trim();
+    if (!text || loading) return;
+
+    const next = [...messages, { role: 'user', content: text }];
+    setMessages(next);
+    setInput('');
+    setLoading(true);
+
+    try {
+      const res  = await fetch('/api/admin/chat', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ messages: next, stats, study: activeSlug, metrics: metrics || [] }),
+      });
+      const data = await res.json();
+      setMessages(prev => [...prev, { role: 'assistant', content: data.reply || 'Sorry, something went wrong.' }]);
+    } catch {
+      setMessages(prev => [...prev, { role: 'assistant', content: 'Something went wrong — please try again.' }]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const suggestions = [
+    'What trends do you see in compliance over time?',
+    'Which participants are falling behind?',
+    'Summarize the check-in results from the past week',
+    'Are there any outliers in the metrics data?',
+  ];
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-100 p-5">
+      <div className="flex items-center gap-2 mb-4">
+        <div className="w-7 h-7 rounded-lg bg-violet-50 flex items-center justify-center shrink-0">
+          <svg className="w-4 h-4 text-violet-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+              d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          </svg>
+        </div>
+        <h3 className="text-sm font-semibold text-slate-700">Data Analysis Assistant</h3>
+        <span className="ml-auto text-xs text-slate-400 bg-slate-50 px-2 py-0.5 rounded-full">Powered by Claude</span>
+        {messages.length > 1 && (
+          <button
+            onClick={clearHistory}
+            className="text-xs text-slate-400 hover:text-red-500 transition ml-2"
+            title="Clear chat history"
+          >
+            Clear history
+          </button>
+        )}
+      </div>
+
+      {/* Message thread */}
+      <div className="bg-slate-50 rounded-xl p-4 space-y-3 max-h-96 overflow-y-auto mb-3">
+        {messages.map((m, i) => (
+          <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`max-w-[85%] rounded-xl px-3.5 py-2.5 text-sm leading-relaxed whitespace-pre-wrap ${
+              m.role === 'user'
+                ? 'bg-violet-600 text-white'
+                : 'bg-white border border-slate-100 text-slate-700'
+            }`}>
+              {m.content}
+            </div>
+          </div>
+        ))}
+        {loading && (
+          <div className="flex justify-start">
+            <div className="bg-white border border-slate-100 rounded-xl px-3.5 py-2.5">
+              <span className="flex gap-1">
+                {[0,1,2].map(i => (
+                  <span key={i} className="w-1.5 h-1.5 bg-slate-300 rounded-full animate-bounce" style={{ animationDelay: `${i * 0.15}s` }} />
+                ))}
+              </span>
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+
+      {/* Suggestion chips */}
+      {messages.length === 1 && (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {suggestions.map((s) => (
+            <button
+              key={s}
+              onClick={() => setInput(s)}
+              className="text-xs bg-slate-100 hover:bg-slate-200 text-slate-600 font-medium px-3 py-1.5 rounded-full transition"
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Input */}
+      <form onSubmit={handleSend} className="flex gap-2">
+        <input
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          placeholder="Ask anything about your study data…"
+          disabled={loading}
+          className="flex-1 px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 bg-white disabled:opacity-60"
+        />
+        <button
+          type="submit"
+          disabled={loading || !input.trim()}
+          className="px-4 py-2.5 bg-violet-600 text-white rounded-xl text-sm font-medium hover:bg-violet-700 disabled:opacity-40 transition"
+        >
+          Send
+        </button>
+      </form>
+    </div>
   );
 }
 
