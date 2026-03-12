@@ -17,6 +17,7 @@ import { useState, useRef, useEffect } from 'react';
 import {
   LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid,
   Tooltip, ResponsiveContainer, Cell, Legend,
+  ScatterChart, Scatter, ReferenceLine,
 } from 'recharts';
 
 // ─── Server-side ─────────────────────────────────────────────────────────────
@@ -1313,21 +1314,660 @@ function AnalysisSection({ summaries, metrics, stats, checkinFieldCols, activeSl
   );
 }
 
-// ─── AnalysisPlanGenerator (placeholder) ─────────────────────────────────────
+// ─── AnalysisPlanGenerator ────────────────────────────────────────────────────
+
+const INTERNAL_PLAN_COLS = new Set(['Subject ID', 'Date', 'Acknowledgments', 'Tonight Checklist']);
+const SD_THRESHOLDS = [2, 2.5, 3];
+const SD_COLORS     = { 2: '#ef4444', 2.5: '#f97316', 3: '#eab308' };
+
+function computeDescriptives(values) {
+  const nums = values.map(Number).filter(v => !isNaN(v));
+  if (!nums.length) return null;
+  const n    = nums.length;
+  const mean = nums.reduce((a, b) => a + b, 0) / n;
+  const variance = nums.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / n;
+  const sd   = Math.sqrt(variance);
+  const sorted = [...nums].sort((a, b) => a - b);
+  const median = n % 2 === 0 ? (sorted[n/2-1] + sorted[n/2]) / 2 : sorted[Math.floor(n/2)];
+  return { n, mean: +mean.toFixed(3), sd: +sd.toFixed(3), median: +median.toFixed(3),
+    min: +sorted[0].toFixed(3), max: +sorted[n-1].toFixed(3) };
+}
 
 function AnalysisPlanGenerator({ metrics, summaries, checkinFieldCols, activeSlug }) {
+  const [step,         setStep]         = useState(1);
+  const [form,         setForm]         = useState({
+    design: '', iv: '', dv: [], conditions: '', covariates: '',
+    primaryOutcome: '', secondaryOutcomes: '', hypothesis: '', notes: '',
+  });
+  const [generating,   setGenerating]   = useState(false);
+  const [plan,         setPlan]         = useState(null);
+  const [saving,       setSaving]       = useState(false);
+  const [saved,        setSaved]        = useState(false);
+  const [sdThreshold,  setSdThreshold]  = useState(2);
+  const [removedPoints, setRemovedPoints] = useState({}); // { "colName|condition|subjectId|date": true }
+
+  // Derive available numeric columns from metrics
+  const allCols = metrics.length > 0
+    ? Object.keys(metrics[0]).filter(k => !INTERNAL_PLAN_COLS.has(k) && k !== 'Condition')
+    : [];
+  const numericCols = allCols.filter(col => {
+    const vals = metrics.map(r => r[col]).filter(v => v !== '' && v != null);
+    return vals.length > 0 && vals.some(v => !isNaN(Number(v)));
+  });
+
+  // Conditions from data
+  const conditions = [...new Set(metrics.map(r => (r['Condition'] || '').trim()).filter(Boolean))].sort();
+  const hasConditions = conditions.length > 0;
+
+  // DVs to analyse = form.dv if set, else all numeric cols
+  const analysedDVs = form.dv.length > 0 ? form.dv : numericCols.slice(0, 6);
+
+  // ── Descriptive stats & outlier computation ─────────────────────────────
+  // Compute per-DV per-condition descriptives and flag outliers
+  const descriptivesByVar = {};
+  analysedDVs.forEach(col => {
+    descriptivesByVar[col] = {};
+    const condList = hasConditions ? conditions : ['All'];
+    condList.forEach(cond => {
+      const rows = metrics.filter(r =>
+        !hasConditions || (r['Condition'] || '').trim() === cond
+      );
+      const vals = rows.map(r => ({ val: Number(r[col]), subjectId: r['Subject ID'], date: (r['Date'] || '').toString().split('T')[0], raw: r[col] }))
+                       .filter(d => !isNaN(d.val) && d.raw !== '' && d.raw != null);
+      const stats = computeDescriptives(vals.map(d => d.val));
+      const outliers = {};
+      SD_THRESHOLDS.forEach(sd => {
+        if (!stats) return;
+        outliers[sd] = vals.filter(d => Math.abs(d.val - stats.mean) > sd * stats.sd);
+      });
+      descriptivesByVar[col][cond] = { stats, vals, outliers };
+    });
+  });
+
+  // Removed points → filtered datasets for downstream use
+  function isRemoved(col, cond, subjectId, date) {
+    return !!removedPoints[`${col}|${cond}|${subjectId}|${date}`];
+  }
+  function toggleRemove(col, cond, subjectId, date) {
+    const key = `${col}|${cond}|${subjectId}|${date}`;
+    setRemovedPoints(prev => ({ ...prev, [key]: !prev[key] }));
+  }
+  const totalRemoved = Object.values(removedPoints).filter(Boolean).length;
+
+  function updateForm(field, value) {
+    setForm(prev => ({ ...prev, [field]: value }));
+  }
+  function toggleDV(col) {
+    setForm(prev => ({
+      ...prev,
+      dv: prev.dv.includes(col) ? prev.dv.filter(c => c !== col) : [...prev.dv, col],
+    }));
+  }
+
+  async function generatePlan() {
+    setGenerating(true);
+    setPlan(null);
+    try {
+      const res  = await fetch('/api/analysis/generate-plan', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          formData: { ...form, dv: analysedDVs.join(', ') },
+          availableColumns: numericCols,
+          studyData: { n: summaries.length, conditions, dateRange: metrics.length > 0
+            ? `${metrics[metrics.length-1]?.['Date']?.toString().split('T')[0]} to ${metrics[0]?.['Date']?.toString().split('T')[0]}` : 'N/A' },
+          referenceDAPs: [],
+        }),
+      });
+      const data = await res.json();
+      if (data.plan) { setPlan(data.plan); setStep(4); }
+      else throw new Error(data.error || 'Generation failed');
+    } catch (err) {
+      alert('Error generating plan: ' + err.message);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  async function savePlan() {
+    setSaving(true);
+    try {
+      const res  = await fetch('/api/analysis/save-plan', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan, formData: form, activeSlug }),
+      });
+      const data = await res.json();
+      if (data.success) setSaved(true);
+      else throw new Error(data.error);
+    } catch (err) {
+      alert('Error saving plan: ' + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const STEP_LABELS = ['Variables & Design', 'Outcomes & Hypotheses', 'Descriptive Review', 'Analysis Plan'];
+
   return (
-    <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center">
-      <div className="w-12 h-12 rounded-2xl bg-violet-50 flex items-center justify-center mx-auto mb-4">
-        <svg className="w-6 h-6 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-            d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-        </svg>
+    <div className="space-y-5">
+
+      {/* Step progress */}
+      <div className="bg-white rounded-2xl border border-slate-100 p-5">
+        <div className="flex items-center gap-0">
+          {STEP_LABELS.map((label, i) => {
+            const n = i + 1;
+            const active = step === n;
+            const done   = step > n || (n === 4 && plan);
+            return (
+              <div key={n} className="flex items-center flex-1">
+                <button
+                  onClick={() => (done || active) && setStep(n)}
+                  className={`flex items-center gap-2 text-xs font-semibold transition ${
+                    active ? 'text-violet-600' : done ? 'text-emerald-600 cursor-pointer' : 'text-slate-400'
+                  }`}
+                >
+                  <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 ${
+                    active ? 'bg-violet-600 text-white' : done ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-100 text-slate-400'
+                  }`}>{done && !active ? '✓' : n}</span>
+                  <span className="hidden sm:inline">{label}</span>
+                </button>
+                {i < STEP_LABELS.length - 1 && <div className={`flex-1 h-px mx-2 ${step > n ? 'bg-emerald-300' : 'bg-slate-200'}`} />}
+              </div>
+            );
+          })}
+        </div>
       </div>
-      <h3 className="text-sm font-semibold text-slate-700 mb-1">Plan Generator — Coming Soon</h3>
-      <p className="text-xs text-slate-400 max-w-sm mx-auto">
-        Build structured analysis plans with IV/DV specification, hypothesis entry, and AI-powered statistical test recommendations.
+
+      {/* ── STEP 1: Variables & Design ── */}
+      {step === 1 && (
+        <div className="bg-white rounded-2xl border border-slate-100 p-6 space-y-5">
+          <h3 className="text-sm font-semibold text-slate-800">Step 1 — Variables & Study Design</h3>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Study Design</label>
+              <select value={form.design} onChange={e => updateForm('design', e.target.value)}
+                className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500">
+                <option value="">Select…</option>
+                <option value="crossover">Crossover (within-subjects)</option>
+                <option value="pre-post">Pre-Post (within-subjects)</option>
+                <option value="between-subjects">Between-subjects (parallel groups)</option>
+                <option value="mixed">Mixed design (between + within)</option>
+                <option value="longitudinal">Longitudinal / repeated measures</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Independent Variable (IV)</label>
+              <input value={form.iv} onChange={e => updateForm('iv', e.target.value)}
+                placeholder="e.g. Condition (Baseline vs Treatment)"
+                className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500" />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
+              Dependent Variables (DVs) — select all that apply
+            </label>
+            {numericCols.length === 0 ? (
+              <p className="text-xs text-slate-400">No numeric columns found in Daily Status data.</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {numericCols.map(col => (
+                  <button key={col} onClick={() => toggleDV(col)}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition ${
+                      form.dv.includes(col)
+                        ? 'bg-violet-600 text-white border-violet-600'
+                        : 'bg-white text-slate-600 border-slate-200 hover:border-violet-300'
+                    }`}>{col}</button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">
+                Conditions / Groups {hasConditions && <span className="text-violet-500">(auto-detected: {conditions.join(', ')})</span>}
+              </label>
+              <input value={form.conditions} onChange={e => updateForm('conditions', e.target.value)}
+                placeholder={hasConditions ? conditions.join(', ') : 'e.g. Baseline, Treatment, Washout'}
+                className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Covariates (optional)</label>
+              <input value={form.covariates} onChange={e => updateForm('covariates', e.target.value)}
+                placeholder="e.g. Age, BMI, Baseline HRV"
+                className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500" />
+            </div>
+          </div>
+
+          <div className="flex justify-end">
+            <button onClick={() => setStep(2)} disabled={!form.design || !form.iv}
+              className="px-5 py-2 bg-violet-600 text-white rounded-xl text-sm font-semibold hover:bg-violet-700 disabled:opacity-40 transition">
+              Next →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP 2: Outcomes & Hypotheses ── */}
+      {step === 2 && (
+        <div className="bg-white rounded-2xl border border-slate-100 p-6 space-y-5">
+          <h3 className="text-sm font-semibold text-slate-800">Step 2 — Outcomes & Hypotheses</h3>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Primary Outcome</label>
+            <input value={form.primaryOutcome} onChange={e => updateForm('primaryOutcome', e.target.value)}
+              placeholder="e.g. HRV improvement from Baseline to Treatment condition"
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500" />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Secondary Outcomes (comma-separated)</label>
+            <input value={form.secondaryOutcomes} onChange={e => updateForm('secondaryOutcomes', e.target.value)}
+              placeholder="e.g. RHR reduction, Sleep Score, Wesper AHI"
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500" />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Hypothesis</label>
+            <textarea value={form.hypothesis} onChange={e => updateForm('hypothesis', e.target.value)} rows={3}
+              placeholder="e.g. We hypothesize that HRV will be significantly higher in the Treatment condition compared to Baseline (directional)."
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Additional Notes</label>
+            <textarea value={form.notes} onChange={e => updateForm('notes', e.target.value)} rows={2}
+              placeholder="Any exclusion criteria, known data quality issues, or analysis-specific context…"
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 text-sm focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none" />
+          </div>
+
+          <div className="flex justify-between">
+            <button onClick={() => setStep(1)} className="px-5 py-2 text-slate-500 text-sm font-semibold hover:text-slate-700 transition">← Back</button>
+            <button onClick={() => setStep(3)} disabled={!form.primaryOutcome}
+              className="px-5 py-2 bg-violet-600 text-white rounded-xl text-sm font-semibold hover:bg-violet-700 disabled:opacity-40 transition">
+              Review Data →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP 3: Descriptive Stats & Outlier Detection ── */}
+      {step === 3 && (
+        <div className="space-y-4">
+          {/* Controls bar */}
+          <div className="bg-white rounded-2xl border border-slate-100 p-4 flex flex-wrap items-center gap-4">
+            <div>
+              <p className="text-sm font-semibold text-slate-700">Descriptive Statistics & Outlier Detection</p>
+              <p className="text-xs text-slate-400">Outliers are flagged and can be excluded per condition before running the analysis.</p>
+            </div>
+            <div className="ml-auto flex items-center gap-3">
+              <span className="text-xs text-slate-500 font-medium">Outlier threshold:</span>
+              {SD_THRESHOLDS.map(sd => (
+                <button key={sd} onClick={() => setSdThreshold(sd)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition ${
+                    sdThreshold === sd ? 'border-violet-600 bg-violet-50 text-violet-700' : 'border-slate-200 text-slate-500 hover:border-slate-300'
+                  }`}>
+                  {sd} SD
+                </button>
+              ))}
+              {totalRemoved > 0 && (
+                <span className="text-xs bg-amber-100 text-amber-700 font-semibold px-2.5 py-1 rounded-full">
+                  {totalRemoved} point{totalRemoved !== 1 ? 's' : ''} excluded
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Per-variable sections */}
+          {analysedDVs.map(col => (
+            <div key={col} className="bg-white rounded-2xl border border-slate-100 overflow-hidden">
+              <div className="px-5 py-3 bg-slate-50 border-b border-slate-100 flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-700">{col}</span>
+                {Object.values(descriptivesByVar[col] || {}).some(c =>
+                  (c.outliers[sdThreshold] || []).length > 0
+                ) && (
+                  <span className="text-xs bg-red-100 text-red-600 font-semibold px-2 py-0.5 rounded-full ml-auto">
+                    ⚠ outliers at {sdThreshold} SD
+                  </span>
+                )}
+              </div>
+
+              <div className="p-5 space-y-4">
+                {/* Descriptive stats table */}
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-left text-slate-400 font-semibold uppercase tracking-wide border-b border-slate-100">
+                        <th className="pb-2 pr-4">Condition</th>
+                        <th className="pb-2 pr-4">N</th>
+                        <th className="pb-2 pr-4">Mean</th>
+                        <th className="pb-2 pr-4">SD</th>
+                        <th className="pb-2 pr-4">Median</th>
+                        <th className="pb-2 pr-4">Min</th>
+                        <th className="pb-2 pr-4">Max</th>
+                        <th className="pb-2">Outliers ({sdThreshold} SD)</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-50">
+                      {Object.entries(descriptivesByVar[col] || {}).map(([cond, { stats: s, outliers }]) => (
+                        <tr key={cond} className="text-slate-600">
+                          <td className="py-2 pr-4 font-medium text-slate-700">{cond}</td>
+                          <td className="py-2 pr-4">{s?.n ?? '—'}</td>
+                          <td className="py-2 pr-4">{s?.mean ?? '—'}</td>
+                          <td className="py-2 pr-4">{s?.sd ?? '—'}</td>
+                          <td className="py-2 pr-4">{s?.median ?? '—'}</td>
+                          <td className="py-2 pr-4">{s?.min ?? '—'}</td>
+                          <td className="py-2 pr-4">{s?.max ?? '—'}</td>
+                          <td className="py-2">
+                            {(outliers[sdThreshold] || []).length > 0 ? (
+                              <span className="font-semibold" style={{ color: SD_COLORS[sdThreshold] }}>
+                                {(outliers[sdThreshold] || []).length} flagged
+                              </span>
+                            ) : (
+                              <span className="text-emerald-500">✓ None</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Chart with SD bands */}
+                <OutlierChart
+                  col={col}
+                  descriptivesByVar={descriptivesByVar}
+                  sdThreshold={sdThreshold}
+                  conditions={hasConditions ? conditions : ['All']}
+                  removedPoints={removedPoints}
+                  onToggleRemove={toggleRemove}
+                />
+
+                {/* Flagged points list with remove toggles */}
+                {Object.entries(descriptivesByVar[col] || {}).map(([cond, { outliers }]) => {
+                  const flagged = (outliers[sdThreshold] || []).filter(d => !isRemoved(col, cond, d.subjectId, d.date));
+                  const removed = (outliers[sdThreshold] || []).filter(d =>  isRemoved(col, cond, d.subjectId, d.date));
+                  if ((outliers[sdThreshold] || []).length === 0) return null;
+                  return (
+                    <div key={cond} className="rounded-xl border border-amber-100 bg-amber-50 p-4">
+                      <p className="text-xs font-semibold text-amber-700 mb-2">
+                        {cond} — {(outliers[sdThreshold] || []).length} outlier{(outliers[sdThreshold] || []).length !== 1 ? 's' : ''} at {sdThreshold} SD
+                      </p>
+                      <div className="space-y-1.5">
+                        {(outliers[sdThreshold] || []).map(d => {
+                          const removed = isRemoved(col, cond, d.subjectId, d.date);
+                          return (
+                            <div key={`${d.subjectId}-${d.date}`}
+                              className={`flex items-center gap-3 text-xs px-3 py-2 rounded-lg transition ${
+                                removed ? 'bg-slate-100 opacity-50' : 'bg-white border border-amber-200'
+                              }`}>
+                              <span className="font-mono font-semibold text-slate-700 w-12 shrink-0">{d.subjectId}</span>
+                              <span className="text-slate-400 shrink-0">{d.date}</span>
+                              <span className="font-semibold text-slate-800">{col} = {d.val.toFixed(3)}</span>
+                              <button
+                                onClick={() => toggleRemove(col, cond, d.subjectId, d.date)}
+                                className={`ml-auto px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                                  removed
+                                    ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                    : 'bg-red-100 text-red-600 hover:bg-red-200'
+                                }`}>
+                                {removed ? '+ Restore' : '× Exclude'}
+                              </button>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+
+          <div className="flex justify-between">
+            <button onClick={() => setStep(2)} className="px-5 py-2 text-slate-500 text-sm font-semibold hover:text-slate-700 transition">← Back</button>
+            <button onClick={generatePlan} disabled={generating}
+              className="px-6 py-2 bg-violet-600 text-white rounded-xl text-sm font-semibold hover:bg-violet-700 disabled:opacity-60 transition flex items-center gap-2">
+              {generating ? (
+                <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Generating plan…</>
+              ) : 'Generate Analysis Plan →'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── STEP 4: Generated Plan ── */}
+      {step === 4 && plan && (
+        <div className="space-y-4">
+          {/* Recommended tests */}
+          {plan.recommendedTests?.length > 0 && (
+            <div className="bg-white rounded-2xl border border-slate-100 p-5">
+              <h3 className="text-sm font-semibold text-slate-700 mb-4">Recommended Statistical Tests</h3>
+              <div className="space-y-3">
+                {plan.recommendedTests.map((t, i) => (
+                  <div key={i} className="rounded-xl border border-slate-100 bg-slate-50 p-4">
+                    <div className="flex items-start gap-3">
+                      <span className="w-7 h-7 rounded-full bg-violet-100 text-violet-700 text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">{i+1}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-semibold text-slate-800">{t.test}</span>
+                          {t.software && <span className="text-xs bg-slate-200 text-slate-600 px-2 py-0.5 rounded font-mono">{t.software}</span>}
+                        </div>
+                        <p className="text-xs text-slate-500 mt-1">{t.rationale}</p>
+                        {t.variables && (
+                          <div className="flex gap-3 mt-1.5 flex-wrap">
+                            {t.variables.outcome  && <span className="text-xs text-slate-400">Outcome: <strong className="text-slate-600">{t.variables.outcome}</strong></span>}
+                            {t.variables.predictor && <span className="text-xs text-slate-400">Predictor: <strong className="text-slate-600">{t.variables.predictor}</strong></span>}
+                            {t.variables.covariates && <span className="text-xs text-slate-400">Covariates: <strong className="text-slate-600">{t.variables.covariates}</strong></span>}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Assumption tests */}
+          {plan.assumptionTests?.length > 0 && (
+            <div className="bg-white rounded-2xl border border-slate-100 p-5">
+              <h3 className="text-sm font-semibold text-slate-700 mb-4">Required Assumption Tests</h3>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="text-left text-slate-400 font-semibold uppercase tracking-wide border-b border-slate-100">
+                      <th className="pb-2 pr-4">Test</th>
+                      <th className="pb-2 pr-4">Variable</th>
+                      <th className="pb-2 pr-4">Pass Threshold</th>
+                      <th className="pb-2">If Violated</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-50">
+                    {plan.assumptionTests.map((t, i) => (
+                      <tr key={i} className="text-slate-600">
+                        <td className="py-2 pr-4 font-semibold text-slate-700">{t.test}</td>
+                        <td className="py-2 pr-4">{t.variable}</td>
+                        <td className="py-2 pr-4 text-emerald-600">{t.threshold}</td>
+                        <td className="py-2 text-amber-600">{t.failAction}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Notes */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {plan.effectSizes && (
+              <div className="bg-white rounded-xl border border-slate-100 p-4">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Effect Sizes</p>
+                <p className="text-sm text-slate-700">{plan.effectSizes}</p>
+              </div>
+            )}
+            {plan.multipleComparisons && (
+              <div className="bg-white rounded-xl border border-slate-100 p-4">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Multiple Comparisons</p>
+                <p className="text-sm text-slate-700">{plan.multipleComparisons}</p>
+              </div>
+            )}
+            {plan.powerConsiderations && (
+              <div className="bg-white rounded-xl border border-slate-100 p-4">
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Power</p>
+                <p className="text-sm text-slate-700">{plan.powerConsiderations}</p>
+              </div>
+            )}
+          </div>
+
+          {/* Full markdown plan */}
+          {plan.planMarkdown && (
+            <div className="bg-white rounded-2xl border border-slate-100 p-5">
+              <h3 className="text-sm font-semibold text-slate-700 mb-3">Full Analysis Plan</h3>
+              <div className="prose prose-sm max-w-none text-slate-600 bg-slate-50 rounded-xl p-4 text-xs leading-relaxed whitespace-pre-wrap font-mono overflow-x-auto max-h-96 overflow-y-auto">
+                {plan.planMarkdown}
+              </div>
+            </div>
+          )}
+
+          {/* Exclusion summary */}
+          {totalRemoved > 0 && (
+            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+              <p className="text-sm font-semibold text-amber-800 mb-1">
+                {totalRemoved} data point{totalRemoved !== 1 ? 's' : ''} marked for exclusion
+              </p>
+              <p className="text-xs text-amber-600">These exclusions are based on condition-level outlier detection and will be applied when running the analysis.</p>
+            </div>
+          )}
+
+          {/* Actions */}
+          <div className="flex items-center gap-3 justify-between">
+            <button onClick={() => setStep(3)} className="px-5 py-2 text-slate-500 text-sm font-semibold hover:text-slate-700 transition">← Back</button>
+            <div className="flex gap-3">
+              <button onClick={() => { setPlan(null); setStep(1); setSaved(false); }}
+                className="px-5 py-2 border border-slate-200 text-slate-600 rounded-xl text-sm font-semibold hover:bg-slate-50 transition">
+                Start Over
+              </button>
+              <button onClick={savePlan} disabled={saving || saved}
+                className="px-6 py-2 bg-violet-600 text-white rounded-xl text-sm font-semibold hover:bg-violet-700 disabled:opacity-60 transition">
+                {saved ? '✓ Saved to Sheet' : saving ? 'Saving…' : 'Save Plan'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── OutlierChart ─────────────────────────────────────────────────────────────
+// Scatter chart showing all data points with SD band overlays per condition
+
+function OutlierChart({ col, descriptivesByVar, sdThreshold, conditions, removedPoints, onToggleRemove }) {
+  const CONDITION_COLORS = ['#6366f1', '#22c55e', '#f59e0b', '#ef4444', '#06b6d4'];
+
+  // Build unified chart data: one entry per data point with condition colour
+  const chartData = [];
+  conditions.forEach((cond, ci) => {
+    const info = (descriptivesByVar[col] || {})[cond];
+    if (!info) return;
+    const { vals, stats: s, outliers } = info;
+    const flaggedIds = new Set((outliers[sdThreshold] || []).map(d => `${d.subjectId}|${d.date}`));
+    vals.forEach((d, i) => {
+      const key      = `${col}|${cond}|${d.subjectId}|${d.date}`;
+      const isOut    = flaggedIds.has(`${d.subjectId}|${d.date}`);
+      const isExcl   = !!removedPoints[key];
+      chartData.push({
+        x:         i + ci * 0.2, // slight x-offset per condition for visibility
+        y:         d.val,
+        subjectId: d.subjectId,
+        date:      d.date,
+        condition: cond,
+        isOutlier: isOut,
+        isExcluded:isExcl,
+        fill: isExcl ? '#94a3b8' : isOut ? SD_COLORS[sdThreshold] : CONDITION_COLORS[ci % CONDITION_COLORS.length],
+        mean:  s?.mean,
+        sd:    s?.sd,
+        upper2:  s ? s.mean + 2    * s.sd : null,
+        lower2:  s ? s.mean - 2    * s.sd : null,
+        upper25: s ? s.mean + 2.5  * s.sd : null,
+        lower25: s ? s.mean - 2.5  * s.sd : null,
+        upper3:  s ? s.mean + 3    * s.sd : null,
+        lower3:  s ? s.mean - 3    * s.sd : null,
+      });
+    });
+  });
+
+  // Reference lines per condition for mean and SD bands
+  const refLines = [];
+  conditions.forEach((cond, ci) => {
+    const info = (descriptivesByVar[col] || {})[cond];
+    if (!info?.stats) return;
+    const { mean, sd } = info.stats;
+    SD_THRESHOLDS.forEach(t => {
+      refLines.push({ y: mean + t * sd, stroke: SD_COLORS[t], dash: '4 2', label: `${cond} +${t}σ` });
+      refLines.push({ y: mean - t * sd, stroke: SD_COLORS[t], dash: '4 2', label: `${cond} -${t}σ` });
+    });
+    refLines.push({ y: mean, stroke: CONDITION_COLORS[ci % CONDITION_COLORS.length], dash: '0', label: `${cond} mean` });
+  });
+
+  return (
+    <div>
+      <p className="text-xs text-slate-400 mb-2">
+        Each dot = one data point. Click a flagged dot to exclude/restore it.
+        <span className="ml-2">
+          {SD_THRESHOLDS.map(t => (
+            <span key={t} className="mr-3 inline-flex items-center gap-1">
+              <span className="w-3 h-0.5 inline-block" style={{ background: SD_COLORS[t] }} />
+              <span>{t}σ band</span>
+            </span>
+          ))}
+          <span className="inline-flex items-center gap-1 text-slate-400">
+            <span className="w-3 h-0.5 inline-block bg-slate-300" />
+            excluded
+          </span>
+        </span>
       </p>
+      <ResponsiveContainer width="100%" height={220}>
+        <ScatterChart margin={{ top: 8, right: 16, left: -20, bottom: 8 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+          <XAxis dataKey="x" type="number" tick={false} axisLine={false} tickLine={false} label={{ value: 'Data points', position: 'insideBottom', fontSize: 10, fill: '#94a3b8' }} />
+          <YAxis dataKey="y" tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} />
+          <Tooltip
+            cursor={{ strokeDasharray: '3 3' }}
+            content={({ active, payload }) => {
+              if (!active || !payload?.length) return null;
+              const d = payload[0].payload;
+              return (
+                <div className="bg-white border border-slate-200 rounded-lg shadow-sm px-3 py-2 text-xs">
+                  <p className="font-semibold text-slate-700">{d.subjectId} · {d.date}</p>
+                  <p className="text-slate-500">{d.condition}: <strong>{d.y?.toFixed(3)}</strong></p>
+                  {d.isOutlier && <p className="text-red-500 font-semibold">⚠ Outlier at {sdThreshold}σ</p>}
+                  {d.isExcluded && <p className="text-slate-400">Excluded from analysis</p>}
+                </div>
+              );
+            }}
+          />
+          <Scatter
+            data={chartData}
+            onClick={(d) => d.isOutlier && onToggleRemove(col, d.condition, d.subjectId, d.date)}
+          >
+            {chartData.map((d, i) => (
+              <Cell
+                key={i}
+                fill={d.fill}
+                opacity={d.isExcluded ? 0.3 : 0.85}
+                cursor={d.isOutlier ? 'pointer' : 'default'}
+              />
+            ))}
+          </Scatter>
+          {/* SD reference lines via recharts ReferenceLine */}
+          {refLines.map((r, i) => (
+            <ReferenceLine key={i} y={r.y} stroke={r.stroke} strokeDasharray={r.dash} strokeWidth={1} />
+          ))}
+        </ScatterChart>
+      </ResponsiveContainer>
     </div>
   );
 }
