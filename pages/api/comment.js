@@ -27,8 +27,11 @@ export default async function handler(req, res) {
 
   const config = await getStudyConfig();
   const scriptUrl = (config.comments_script_url || '').trim();
+  const writeUrl  = (process.env.SHEET_WRITE_URL || '').trim();
 
-  console.log('[comment] comments_script_url from config:', scriptUrl ? `${scriptUrl.slice(0, 60)}...` : '(empty)');
+  console.log('[comment] comments_script_url (from Study Config sheet):', scriptUrl ? `...${scriptUrl.slice(-40)}` : '(empty)');
+  console.log('[comment] SHEET_WRITE_URL     (from env var):           ', writeUrl  ? `...${writeUrl.slice(-40)}`  : '(empty)');
+  console.log('[comment] URLs match?', scriptUrl && writeUrl ? (scriptUrl === writeUrl ? 'YES' : 'NO — different deployments!') : 'cannot compare (one is empty)');
 
   if (!scriptUrl) {
     console.log('[comment] No comments_script_url configured — returning 503');
