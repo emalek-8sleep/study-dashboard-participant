@@ -74,8 +74,8 @@ export async function getServerSideProps({ params, req }) {
   const tonightDay   = currentPhase?.days?.find((d) => d.status === 'inprogress') || currentPhase?.days?.find((d) => d.status === 'pending');
   const tonightInfo  = (currentPhase && tonightDay) ? {
     phaseName:        currentPhase.phaseName,
-    phaseDescription: currentPhase.description || '',
-    phaseGoal:        currentPhase.goal         || '',
+    phaseDescription: tonightDay.description    || '',   // per-day description, not phase-level
+    phaseGoal:        tonightDay.goal           || currentPhase.goal || '',
     dayNumber:        tonightDay.dayNumber,
     dayLabel:         tonightDay.dayLabel        || '',
     completedDays:    currentPhase.completedDays,
