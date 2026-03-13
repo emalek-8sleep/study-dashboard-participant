@@ -1,5 +1,5 @@
 const WRITE_SECRET     = 'study-dashboard-pin-login';
-const SPREADSHEET_ID   = '1Kblc2qx1EbepvsGdnFl26Waf0hYTEjkEmo9Soy356bE';
+const SPREADSHEET_ID   = '1Kblc2qx1EbepvsGdnFI26Waf0hYTEjkEmo9Soy356bE';
 
 function doPost(e) {
   try {
