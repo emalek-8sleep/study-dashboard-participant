@@ -37,6 +37,29 @@ function formatDate(dateStr, short = false) {
   }
 }
 
+// Daily Status rows are dated the morning of submission (e.g. Thu Mar 12),
+// but they represent the previous night's sleep (Wed night → Thu morning).
+// Subtract 1 day so labels say "Wed, Mar 11" not "Thu, Mar 12".
+// Parses as local midnight (not UTC) to avoid date-shift in US timezones.
+function formatNightDate(dateStr, short = false) {
+  if (!dateStr) return '';
+  try {
+    const s = dateStr.toString().trim().split('T')[0];
+    // Parse YYYY-MM-DD as local midnight to avoid UTC shift
+    const isoMatch = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const d = isoMatch
+      ? new Date(+isoMatch[1], +isoMatch[2] - 1, +isoMatch[3])
+      : new Date(s); // M/D/YYYY already parses as local
+    if (isNaN(d.getTime())) return s;
+    d.setDate(d.getDate() - 1); // step back to the actual sleep night
+    return d.toLocaleDateString('en-US', short
+      ? { weekday: 'short', month: 'short', day: 'numeric' }
+      : { weekday: 'long', month: 'long', day: 'numeric' });
+  } catch {
+    return dateStr;
+  }
+}
+
 function parseTips(raw) {
   if (!raw) return [];
   const t = raw.trim();
@@ -208,7 +231,7 @@ function HistoryRow({ row, checkinFields, config, isBreakNight = false }) {
       <div className="border border-slate-100 rounded-xl bg-slate-50/60">
         <div className="flex items-center gap-3 px-4 py-3">
           <span className="text-xs font-medium text-slate-400 w-24 sm:w-36 shrink-0 truncate">
-            {formatDate(row['Date'], true)}
+            {formatNightDate(row['Date'], true)}
           </span>
           <div className="flex items-center gap-1.5 flex-1">
             <svg className="w-3.5 h-3.5 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -233,7 +256,7 @@ function HistoryRow({ row, checkinFields, config, isBreakNight = false }) {
         className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-slate-50 transition"
       >
         <span className="text-xs font-medium text-slate-500 w-24 sm:w-36 shrink-0 truncate">
-          {formatDate(row['Date'], true)}
+          {formatNightDate(row['Date'], true)}
         </span>
 
         <div className="flex items-center gap-1 flex-1">
@@ -371,7 +394,7 @@ export default function DailyStatusCard({
             <h3 className="section-title mb-0">Last Night's Check-In</h3>
             {hasToday && (
               <span className="text-sm font-semibold text-slate-500">
-                {formatDate(todayStatus['Date'], true)}
+                {formatNightDate(todayStatus['Date'], true)}
               </span>
             )}
           </div>
