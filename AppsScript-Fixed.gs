@@ -9,8 +9,8 @@ function doPost(e) {
     // ─────────────────────────────────────────────────────────────────
     // COMMENTS - no authentication required
     // ─────────────────────────────────────────────────────────────────
-    if (!data.secret && action !== 'read' && action !== 'add_login' && action !== 'update_last_login') {
-      // This is a comment request (no secret field present)
+    if (!action && data.comment !== undefined) {
+      // This is a comment request — no action field, has a comment field
       const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
       let sheet = ss.getSheetByName('Comments');
       if (!sheet) {
