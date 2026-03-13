@@ -2452,8 +2452,12 @@ ${interpHtml}
                       </div>
                     )}
                     <OutlierChart
-                      col={col} cond={cond} vals={vals} stats={stats}
-                      sdThreshold={sdThreshold} isRemoved={isRemoved} onToggleRemove={toggleRemove}
+                      col={col}
+                      descriptivesByVar={descriptivesByVar}
+                      sdThreshold={sdThreshold}
+                      conditions={hasConditions ? conditions : ['All']}
+                      removedPoints={removedPoints}
+                      onToggleRemove={toggleRemove}
                     />
                     {/* Outlier list */}
                     {(outliers[sdThreshold] || []).length > 0 && (
