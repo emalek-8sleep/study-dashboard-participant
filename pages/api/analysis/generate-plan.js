@@ -54,7 +54,7 @@ You must respond with a valid JSON object only — no markdown fences, no extra 
   "effectSizes": "string — which effect size metrics to report for each test",
   "powerConsiderations": "string — brief note on statistical power given n",
   "interpretationNotes": "string — key caveats and interpretation guidance",
-  "planMarkdown": "string — full analysis plan in markdown format, professional and publication-ready"
+  "planMarkdown": "string — concise analysis plan in markdown format (aim for ~600 words max), professional and publication-ready. Cover rationale, methods, and key caveats. Do not repeat everything from the other fields."
 }${refContext}`;
 
   const userMessage = `Generate a complete statistical analysis plan for the following study:
@@ -83,7 +83,7 @@ Generate the full analysis plan. Be specific about which columns map to which va
       },
       body: JSON.stringify({
         model:      'claude-haiku-4-5-20251001',
-        max_tokens: 4096,
+        max_tokens: 8096,
         system:     systemPrompt,
         messages:   [{ role: 'user', content: userMessage }],
       }),
@@ -98,13 +98,47 @@ Generate the full analysis plan. Be specific about which columns map to which va
     const data = await response.json();
     const raw  = data.content?.[0]?.text || '{}';
 
+    // Warn if response was truncated due to token limit
+    if (data.stop_reason === 'max_tokens') {
+      console.warn('[generate-plan] Response truncated at max_tokens — attempting recovery');
+    }
+
     let plan;
     try {
       plan = JSON.parse(raw);
     } catch {
-      // Sometimes Claude wraps JSON in fences despite instructions
-      const match = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-      plan = match ? JSON.parse(match[1]) : { planMarkdown: raw };
+      // Try stripping markdown fences first
+      const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (fenceMatch) {
+        try { plan = JSON.parse(fenceMatch[1]); } catch { /* fall through */ }
+      }
+
+      // If still no plan, try to recover a truncated JSON by extracting what we can
+      if (!plan) {
+        try {
+          // Pull out any complete top-level string fields we can find
+          const extract = (key) => {
+            const m = raw.match(new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`));
+            return m ? m[1].replace(/\\n/g, '\n').replace(/\\"/g, '"') : '';
+          };
+          plan = {
+            title:                extract('title') || 'Analysis Plan (truncated)',
+            planMarkdown:         extract('planMarkdown') || raw,
+            multipleComparisons:  extract('multipleComparisons') || '',
+            effectSizes:          extract('effectSizes') || '',
+            powerConsiderations:  extract('powerConsiderations') || '',
+            interpretationNotes:  extract('interpretationNotes') || '',
+            recommendedTests:     [],
+            assumptionTests:      [],
+            _truncated:           true,
+          };
+          // Try to parse out recommendedTests array
+          const testsMatch = raw.match(/"recommendedTests"\s*:\s*(\[[\s\S]*?\])\s*,/);
+          if (testsMatch) { try { plan.recommendedTests = JSON.parse(testsMatch[1]); } catch { /* ignore */ } }
+        } catch {
+          plan = { planMarkdown: raw, _truncated: true };
+        }
+      }
     }
 
     return res.status(200).json({ plan });
