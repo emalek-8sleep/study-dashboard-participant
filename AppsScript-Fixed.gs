@@ -1,4 +1,5 @@
-const WRITE_SECRET = 'study-dashboard-pin-login';
+const WRITE_SECRET     = 'study-dashboard-pin-login';
+const SPREADSHEET_ID   = '1Kblc2qx1EbepvsGdnFl26Waf0hYTEjkEmo9Soy356bE';
 
 function doPost(e) {
   try {
@@ -10,7 +11,7 @@ function doPost(e) {
     // ─────────────────────────────────────────────────────────────────
     if (!data.secret && action !== 'read' && action !== 'add_login' && action !== 'update_last_login') {
       // This is a comment request (no secret field present)
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
       let sheet = ss.getSheetByName('Comments');
       if (!sheet) {
         sheet = ss.insertSheet('Comments');
@@ -25,7 +26,7 @@ function doPost(e) {
     // LOGIN LOGGING - no authentication required
     // ─────────────────────────────────────────────────────────────────
     if (action === 'add_login') {
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
       let sheet = ss.getSheetByName('Login Activity');
       if (!sheet) {
         sheet = ss.insertSheet('Login Activity');
@@ -42,7 +43,7 @@ function doPost(e) {
     }
 
     if (action === 'update_last_login') {
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
       const sheet = ss.getSheetByName('Participants');
       if (!sheet) {
         throw new Error('Participants sheet not found');
@@ -102,7 +103,7 @@ function doPost(e) {
         ],
       };
 
-      const ss = SpreadsheetApp.getActiveSpreadsheet();
+      const ss = SpreadsheetApp.openById(SPREADSHEET_ID);
       let sheet = ss.getSheetByName(data.tab);
       if (!sheet) {
         sheet = ss.insertSheet(data.tab);
@@ -123,7 +124,7 @@ function doPost(e) {
     }
 
     const { subjectId, column, value, tab, dateStr } = data;
-    const ss        = SpreadsheetApp.getActiveSpreadsheet();
+    const ss        = SpreadsheetApp.openById(SPREADSHEET_ID);
     const sheetName = tab || 'Participants';
     const sheet     = ss.getSheetByName(sheetName);
     if (!sheet) throw new Error('Sheet not found: ' + sheetName);
