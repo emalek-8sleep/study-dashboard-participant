@@ -2740,21 +2740,542 @@ ${interpHtml}
   return null;
 }
 
-// ─── AnalysisHistory (placeholder) ───────────────────────────────────────────
+// ─── AnalysisHistory ──────────────────────────────────────────────────────────
+
+const HIST_TAB_KEY  = (slug) => `analysis_hist_tab_${slug}`;
+const REF_DAPS_KEY  = (slug) => `analysis_ref_daps_${slug}`;
 
 function AnalysisHistory({ activeSlug }) {
-  return (
-    <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-12 text-center">
-      <div className="w-12 h-12 rounded-2xl bg-violet-50 flex items-center justify-center mx-auto mb-4">
-        <svg className="w-6 h-6 text-violet-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-            d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-        </svg>
+  const [histTab,      setHistTab]      = useState(() => {
+    try { return localStorage.getItem(HIST_TAB_KEY(activeSlug)) || 'runs'; } catch { return 'runs'; }
+  });
+  const [runs,         setRuns]         = useState([]);
+  const [runsLoading,  setRunsLoading]  = useState(true);
+  const [plans,        setPlans]        = useState([]);
+  const [plansLoading, setPlansLoading] = useState(true);
+  const [expandedRun,  setExpandedRun]  = useState(null); // run object currently open
+  const [expandedPlan, setExpandedPlan] = useState(null); // plan object currently open
+  const [daps,         setDaps]         = useState([]);   // reference DAPs from localStorage
+  const [dapUploading, setDapUploading] = useState(false);
+  const dapInputRef = useRef(null);
+
+  // Q&A state (per expanded run)
+  const [qaMessages, setQaMessages] = useState([]); // [{ role, content }]
+  const [qaInput,    setQaInput]    = useState('');
+  const [qaLoading,  setQaLoading]  = useState(false);
+  const qaEndRef = useRef(null);
+
+  // Persist sub-tab
+  function switchHistTab(tab) {
+    setHistTab(tab);
+    try { localStorage.setItem(HIST_TAB_KEY(activeSlug), tab); } catch { /* ignore */ }
+  }
+
+  // Load runs + plans on mount
+  useEffect(() => {
+    if (!activeSlug) return;
+    fetch(`/api/analysis/get-runs?study=${encodeURIComponent(activeSlug)}`)
+      .then(r => r.json()).then(d => setRuns(d.runs || [])).catch(() => setRuns([]))
+      .finally(() => setRunsLoading(false));
+    fetch(`/api/analysis/get-plans?study=${encodeURIComponent(activeSlug)}`)
+      .then(r => r.json()).then(d => setPlans(d.plans || [])).catch(() => setPlans([]))
+      .finally(() => setPlansLoading(false));
+  }, [activeSlug]);
+
+  // Load reference DAPs from localStorage
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(REF_DAPS_KEY(activeSlug));
+      setDaps(stored ? JSON.parse(stored) : []);
+    } catch { setDaps([]); }
+  }, [activeSlug]);
+
+  function saveDaps(next) {
+    setDaps(next);
+    try { localStorage.setItem(REF_DAPS_KEY(activeSlug), JSON.stringify(next)); } catch { /* ignore */ }
+  }
+
+  // ── Reference DAP upload ──────────────────────────────────────────────────
+  async function handleDapUpload(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setDapUploading(true);
+    try {
+      const text = await file.text();
+      const newDap = { name: file.name, content: text.slice(0, 8000), uploadedAt: new Date().toISOString() };
+      saveDaps([newDap, ...daps.filter(d => d.name !== file.name)].slice(0, 5)); // max 5 DAPs
+    } catch (err) {
+      alert(`Could not read file: ${err.message}`);
+    } finally {
+      setDapUploading(false);
+      if (dapInputRef.current) dapInputRef.current.value = '';
+    }
+  }
+
+  // ── Expand a run and reset Q&A ────────────────────────────────────────────
+  function openRun(run) {
+    setExpandedRun(run);
+    setQaMessages([]);
+    setQaInput('');
+    setExpandedPlan(null);
+  }
+
+  // ── Download HTML report ──────────────────────────────────────────────────
+  function downloadReport(run) {
+    if (!run.reportHtml) return;
+    const blob = new Blob([run.reportHtml], { type: 'text/html' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `analysis-report-${run.planTitle || run.id}.html`.replace(/\s+/g, '-');
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // ── Q&A submit ────────────────────────────────────────────────────────────
+  async function handleQaSubmit(e) {
+    e.preventDefault();
+    if (!qaInput.trim() || qaLoading || !expandedRun) return;
+    const question = qaInput.trim();
+    setQaInput('');
+    const newMessages = [...qaMessages, { role: 'user', content: question }];
+    setQaMessages(newMessages);
+    setQaLoading(true);
+    setTimeout(() => qaEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+    try {
+      const res = await fetch('/api/analysis/qa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question,
+          history:        qaMessages,
+          planTitle:      expandedRun.planTitle,
+          resultsJson:    expandedRun.results,
+          interpretation: expandedRun.interpretation,
+          studySlug:      activeSlug,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error);
+      setQaMessages([...newMessages, { role: 'assistant', content: data.answer }]);
+    } catch (err) {
+      setQaMessages([...newMessages, { role: 'assistant', content: `*Error: ${err.message}*` }]);
+    } finally {
+      setQaLoading(false);
+      setTimeout(() => qaEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Sub-tab nav
+  const histTabs = [
+    { key: 'runs',  label: 'Analysis Runs' },
+    { key: 'plans', label: 'Saved Plans'   },
+    { key: 'daps',  label: 'Reference DAPs'},
+  ];
+
+  // ── Detail view: expanded run ─────────────────────────────────────────────
+  if (expandedRun) {
+    const run     = expandedRun;
+    const tests   = run.results?.tests       || [];
+    const assmpts = run.results?.assumptions || [];
+    const descs   = run.results?.descriptives || [];
+
+    return (
+      <div className="space-y-5">
+        {/* Back + actions */}
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <button onClick={() => setExpandedRun(null)}
+              className="text-xs text-violet-500 hover:text-violet-700 mb-1 flex items-center gap-1">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/>
+              </svg>
+              Back to history
+            </button>
+            <h2 className="text-sm font-semibold text-slate-800">{run.planTitle || 'Analysis Run'}</h2>
+            <p className="text-xs text-slate-400 mt-0.5">
+              {run.createdAt ? new Date(run.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) : ''}
+              {run.status ? ` · ${run.status}` : ''}
+            </p>
+          </div>
+          {run.reportHtml && (
+            <button onClick={() => downloadReport(run)}
+              className="px-3 py-1.5 bg-white border border-slate-200 hover:border-violet-300 text-slate-600 hover:text-violet-600 rounded-xl text-xs font-semibold transition-colors">
+              ↓ Download Report
+            </button>
+          )}
+        </div>
+
+        {/* Test results */}
+        {tests.length > 0 && (
+          <div className="space-y-3">
+            {tests.map((t, i) => (
+              <div key={i} className="bg-white border border-slate-200 rounded-2xl px-4 py-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-800">{t.name}</p>
+                    <p className="text-xs text-slate-500 mt-0.5">{t.details}</p>
+                    {t.direction && <p className="text-xs text-slate-600 mt-0.5 font-medium">{t.direction}</p>}
+                  </div>
+                  <span className={`flex-shrink-0 px-2.5 py-1 rounded-full text-xs font-bold ${t.significant ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
+                    p = {t.pValue?.toFixed(3) ?? '—'}
+                  </span>
+                </div>
+                {t.effectSize != null && (
+                  <p className="text-xs text-slate-400 mt-1">{t.effectSizeType} = {t.effectSize?.toFixed(3)}</p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Assumption checks */}
+        {assmpts.length > 0 && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-4">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-2">Assumption Checks</h3>
+            <div className="space-y-1.5">
+              {assmpts.map((a, i) => (
+                <div key={i} className={`flex items-start justify-between gap-3 px-3 py-2 rounded-lg text-xs ${a.passed ? 'bg-green-50' : 'bg-amber-50'}`}>
+                  <span className="text-slate-600">{a.test} · <span className="font-medium">{a.variable}</span>{a.condition ? ` [${a.condition}]` : ''} — {a.interpretation}</span>
+                  <span className={`flex-shrink-0 font-bold ${a.passed ? 'text-green-600' : 'text-amber-600'}`}>{a.passed ? '✓' : '⚠'}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Descriptives table */}
+        {descs.length > 0 && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-4">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Descriptive Statistics</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-slate-100">
+                    {['Variable','Condition','n','Mean','SD','Median','Min','Max'].map(h => (
+                      <th key={h} className="text-left pb-2 pr-4 text-slate-400 font-semibold">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {descs.map((d, i) => (
+                    <tr key={i} className="border-b border-slate-50">
+                      <td className="py-1.5 pr-4 font-medium text-slate-700">{d.variable}</td>
+                      <td className="py-1.5 pr-4 text-slate-500">{d.condition}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{d.n}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{d.mean?.toFixed(3)}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{d.sd?.toFixed(3)}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{d.median?.toFixed(3)}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{d.min?.toFixed(3)}</td>
+                      <td className="py-1.5 pr-4 text-slate-600">{d.max?.toFixed(3)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Interpretation */}
+        {run.interpretation && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-4">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">AI Interpretation</h3>
+            <div className="text-xs leading-relaxed text-slate-600"
+              dangerouslySetInnerHTML={{ __html: renderMarkdown(run.interpretation) }} />
+          </div>
+        )}
+
+        {/* ── Stakeholder Q&A ──────────────────────────────────────────── */}
+        <div className="bg-white border border-slate-200 rounded-2xl p-4">
+          <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Stakeholder Q&amp;A</h3>
+          <p className="text-xs text-slate-400 mb-3">Ask questions about this analysis — Claude will answer based on the results and interpretation above.</p>
+
+          {/* Message thread */}
+          {qaMessages.length > 0 && (
+            <div className="space-y-3 mb-4 max-h-80 overflow-y-auto pr-1">
+              {qaMessages.map((m, i) => (
+                <div key={i} className={`flex gap-2.5 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  {m.role === 'assistant' && (
+                    <div className="w-6 h-6 rounded-full bg-violet-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+                      <span className="text-[9px] font-bold text-violet-600">AI</span>
+                    </div>
+                  )}
+                  <div className={`max-w-[80%] rounded-2xl px-3 py-2 text-xs leading-relaxed ${
+                    m.role === 'user'
+                      ? 'bg-violet-500 text-white rounded-br-sm'
+                      : 'bg-slate-50 text-slate-700 rounded-bl-sm border border-slate-100'
+                  }`}>
+                    {m.role === 'assistant'
+                      ? <span dangerouslySetInnerHTML={{ __html: renderMarkdown(m.content) }} />
+                      : m.content}
+                  </div>
+                </div>
+              ))}
+              {qaLoading && (
+                <div className="flex gap-2.5 justify-start">
+                  <div className="w-6 h-6 rounded-full bg-violet-100 flex items-center justify-center flex-shrink-0">
+                    <span className="text-[9px] font-bold text-violet-600">AI</span>
+                  </div>
+                  <div className="bg-slate-50 border border-slate-100 rounded-2xl rounded-bl-sm px-3 py-2">
+                    <svg className="w-4 h-4 text-violet-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" className="opacity-25"/>
+                      <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="2" className="opacity-75"/>
+                    </svg>
+                  </div>
+                </div>
+              )}
+              <div ref={qaEndRef} />
+            </div>
+          )}
+
+          {/* Input */}
+          <form onSubmit={handleQaSubmit} className="flex gap-2">
+            <input
+              value={qaInput}
+              onChange={e => setQaInput(e.target.value)}
+              disabled={qaLoading}
+              placeholder="Ask a question about this analysis…"
+              className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-violet-300 focus:border-violet-300 disabled:opacity-50"
+            />
+            <button type="submit" disabled={!qaInput.trim() || qaLoading}
+              className="px-3 py-2 bg-violet-500 hover:bg-violet-600 disabled:bg-slate-200 text-white disabled:text-slate-400 rounded-xl text-xs font-semibold transition-colors">
+              Ask
+            </button>
+          </form>
+        </div>
+
+        {/* Code used (collapsible) */}
+        {run.codeUsed && (
+          <details className="bg-white border border-slate-200 rounded-2xl">
+            <summary className="px-4 py-3 text-xs font-semibold text-slate-500 cursor-pointer select-none">
+              Python Code Used
+            </summary>
+            <pre className="px-4 pb-4 text-[10px] font-mono text-emerald-400 bg-slate-900 rounded-b-2xl overflow-x-auto whitespace-pre-wrap max-h-64">
+              {run.codeUsed}
+            </pre>
+          </details>
+        )}
       </div>
-      <h3 className="text-sm font-semibold text-slate-700 mb-1">History — Coming Soon</h3>
-      <p className="text-xs text-slate-400 max-w-sm mx-auto">
-        Browse past analysis runs and their outputs, review saved plans, and upload reference DAPs that inform future plan generation.
-      </p>
+    );
+  }
+
+  // ── Detail view: expanded plan ────────────────────────────────────────────
+  if (expandedPlan) {
+    const p = expandedPlan;
+    return (
+      <div className="space-y-4">
+        <div>
+          <button onClick={() => setExpandedPlan(null)}
+            className="text-xs text-violet-500 hover:text-violet-700 mb-1 flex items-center gap-1">
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7"/>
+            </svg>
+            Back to plans
+          </button>
+          <h2 className="text-sm font-semibold text-slate-800">{p['Title'] || p.title || 'Untitled Plan'}</h2>
+          <p className="text-xs text-slate-400 mt-0.5">
+            {p['Created At'] || p.createdAt ? new Date(p['Created At'] || p.createdAt).toLocaleDateString() : ''}
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          {[
+            ['Design',   p['Design']   || p.design   || '—'],
+            ['IV',       p['IV']       || p.iv       || '—'],
+            ['DVs',      p['DV']       || p.dv       || '—'],
+            ['Conditions', p['Conditions'] || p.conditions || '—'],
+            ['Tests',    p['Statistical Tests'] || p.statisticalTests || '—'],
+            ['Primary Outcome', p['Primary Outcome'] || p.primaryOutcome || '—'],
+          ].map(([label, val]) => (
+            <div key={label} className="bg-slate-50 rounded-xl px-3 py-2">
+              <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide">{label}</p>
+              <p className="text-xs text-slate-700 mt-0.5">{val}</p>
+            </div>
+          ))}
+        </div>
+        {(p['Full Text'] || p.planMarkdown) && (
+          <div className="bg-white border border-slate-200 rounded-2xl p-4">
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wide mb-3">Full Analysis Plan</h3>
+            <div className="text-xs leading-relaxed text-slate-600 whitespace-pre-wrap font-mono">
+              {p['Full Text'] || p.planMarkdown}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // ── List views ────────────────────────────────────────────────────────────
+  return (
+    <div className="space-y-4">
+      {/* Sub-tab nav */}
+      <div className="flex gap-1 bg-slate-100 rounded-xl p-1 w-fit">
+        {histTabs.map(t => (
+          <button key={t.key} onClick={() => switchHistTab(t.key)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+              histTab === t.key ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+            }`}>
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {/* ── RUNS tab ─────────────────────────────────────────────────── */}
+      {histTab === 'runs' && (
+        <div className="space-y-2">
+          {runsLoading ? (
+            <div className="flex items-center gap-2 py-8 justify-center text-xs text-slate-400">
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" className="opacity-25"/>
+                <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="2" className="opacity-75"/>
+              </svg>
+              Loading runs…
+            </div>
+          ) : runs.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-10 text-center">
+              <p className="text-sm font-medium text-slate-600 mb-1">No analysis runs yet</p>
+              <p className="text-xs text-slate-400">Run an analysis in the Run Analysis tab to see results here.</p>
+            </div>
+          ) : (
+            runs.map((run, i) => {
+              const sigCount = (run.results?.tests || []).filter(t => t.significant).length;
+              const totalTests = (run.results?.tests || []).length;
+              return (
+                <div key={i} onClick={() => openRun(run)}
+                  className="bg-white border border-slate-200 rounded-xl px-4 py-3 cursor-pointer hover:border-violet-300 hover:bg-violet-50 transition-all group">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-800 truncate">{run.planTitle || 'Untitled Run'}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        {run.createdAt ? new Date(run.createdAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' }) : '—'}
+                      </p>
+                    </div>
+                    <div className="flex-shrink-0 flex items-center gap-2">
+                      {totalTests > 0 && (
+                        <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${sigCount > 0 ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-500'}`}>
+                          {sigCount}/{totalTests} sig.
+                        </span>
+                      )}
+                      <svg className="w-4 h-4 text-slate-300 group-hover:text-violet-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/>
+                      </svg>
+                    </div>
+                  </div>
+                  {run.interpretation && (
+                    <p className="text-xs text-slate-500 mt-1.5 line-clamp-2 leading-relaxed">
+                      {run.interpretation.replace(/#{1,4} /g, '').replace(/\*\*/g, '').slice(0, 160)}…
+                    </p>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {/* ── PLANS tab ────────────────────────────────────────────────── */}
+      {histTab === 'plans' && (
+        <div className="space-y-2">
+          {plansLoading ? (
+            <div className="flex items-center gap-2 py-8 justify-center text-xs text-slate-400">
+              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" className="opacity-25"/>
+                <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="2" className="opacity-75"/>
+              </svg>
+              Loading plans…
+            </div>
+          ) : plans.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-10 text-center">
+              <p className="text-sm font-medium text-slate-600 mb-1">No saved plans yet</p>
+              <p className="text-xs text-slate-400">Create a plan in the Plan Generator tab to see it here.</p>
+            </div>
+          ) : (
+            plans.map((p, i) => (
+              <div key={i} onClick={() => setExpandedPlan(p)}
+                className="bg-white border border-slate-200 rounded-xl px-4 py-3 cursor-pointer hover:border-violet-300 hover:bg-violet-50 transition-all group">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-800 truncate">{p['Title'] || p.title || 'Untitled Plan'}</p>
+                    <p className="text-xs text-slate-500 mt-0.5">{p['Design'] || p.design} · IV: {p['IV'] || p.iv} · DVs: {p['DV'] || p.dv}</p>
+                  </div>
+                  <div className="flex-shrink-0 flex items-center gap-2">
+                    <span className="text-xs text-slate-400">{p['Created At'] ? new Date(p['Created At']).toLocaleDateString() : ''}</span>
+                    <svg className="w-4 h-4 text-slate-300 group-hover:text-violet-400 transition-colors" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7"/>
+                    </svg>
+                  </div>
+                </div>
+                {(p['Statistical Tests'] || p.statisticalTests) && (
+                  <p className="text-xs text-slate-400 mt-1 truncate">Tests: {p['Statistical Tests'] || p.statisticalTests}</p>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* ── REFERENCE DAPs tab ───────────────────────────────────────── */}
+      {histTab === 'daps' && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Upload past analysis plans (DAPs) as plain-text reference files. Claude uses these to match your team's style and preferred methods when generating new plans.
+              </p>
+              <p className="text-xs text-slate-400 mt-0.5">Accepts .txt or .md files · Max 5 files · Max 8,000 characters each</p>
+            </div>
+            <div>
+              <input ref={dapInputRef} type="file" accept=".txt,.md" onChange={handleDapUpload}
+                className="hidden" id="dap-upload" />
+              <label htmlFor="dap-upload"
+                className={`cursor-pointer px-3 py-1.5 bg-violet-50 hover:bg-violet-100 text-violet-600 rounded-xl text-xs font-semibold transition-colors flex items-center gap-1.5 ${dapUploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                {dapUploading ? (
+                  <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" className="opacity-25"/>
+                    <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="2" className="opacity-75"/>
+                  </svg>
+                ) : (
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/>
+                  </svg>
+                )}
+                Upload DAP
+              </label>
+            </div>
+          </div>
+
+          {daps.length === 0 ? (
+            <div className="bg-white rounded-2xl border border-dashed border-slate-200 p-10 text-center">
+              <p className="text-sm font-medium text-slate-600 mb-1">No reference DAPs uploaded</p>
+              <p className="text-xs text-slate-400">Upload a past analysis plan to improve future plan generation.</p>
+            </div>
+          ) : (
+            daps.map((dap, i) => (
+              <div key={i} className="bg-white border border-slate-200 rounded-xl px-4 py-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-slate-700 truncate">{dap.name}</p>
+                    <p className="text-xs text-slate-400 mt-0.5">
+                      {dap.content.length.toLocaleString()} chars ·
+                      Uploaded {new Date(dap.uploadedAt).toLocaleDateString()}
+                    </p>
+                  </div>
+                  <button onClick={() => saveDaps(daps.filter((_, j) => j !== i))}
+                    className="flex-shrink-0 text-xs text-red-400 hover:text-red-600 font-semibold transition-colors">
+                    Remove
+                  </button>
+                </div>
+                <details className="mt-2">
+                  <summary className="text-[10px] text-slate-400 cursor-pointer hover:text-slate-600 select-none">Preview</summary>
+                  <pre className="mt-1 text-[10px] text-slate-500 bg-slate-50 rounded-lg p-2 overflow-x-auto whitespace-pre-wrap max-h-32">
+                    {dap.content.slice(0, 500)}{dap.content.length > 500 ? '…' : ''}
+                  </pre>
+                </details>
+              </div>
+            ))
+          )}
+        </div>
+      )}
     </div>
   );
 }
