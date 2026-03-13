@@ -26,7 +26,9 @@ export default async function handler(req, res) {
   }
 
   const config = await getStudyConfig();
-  const scriptUrl = (config.comments_script_url || '').trim();
+  // Prefer data_analysis_comments_script_url (for the duplicated Vercel project),
+  // fall back to comments_script_url if not set.
+  const scriptUrl = (config.data_analysis_comments_script_url || config.comments_script_url || '').trim();
 
   if (!scriptUrl) {
     return res.status(503).json({ error: 'Comments are not yet configured for this study.' });
