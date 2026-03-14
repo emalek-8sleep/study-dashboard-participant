@@ -439,8 +439,9 @@ function AdminDashboard({ studyName, summaries, stats, metrics, metricsSummary, 
           {/* ── Tab navigation ── */}
           <div className="flex items-center gap-1 border-b border-slate-200">
             {[
-              { key: 'overview', label: 'Overview' },
-              { key: 'data',     label: `Data${metrics.length > 0 ? ` (${metrics.length})` : ''}` },
+              { key: 'overview',    label: 'Overview' },
+              { key: 'data',        label: `Data${metrics.length > 0 ? ` (${metrics.length})` : ''}` },
+              { key: 'eligibility', label: 'Eligibility' },
             ].map((tab) => (
               <button
                 key={tab.key}
@@ -465,6 +466,14 @@ function AdminDashboard({ studyName, summaries, stats, metrics, metricsSummary, 
               metrics={metrics}
               metricsSummary={metricsSummary}
               checkinFieldCols={checkinFieldCols}
+              activeSlug={activeSlug}
+            />
+          )}
+
+          {/* ── ELIGIBILITY TAB ── */}
+          {activeTab === 'eligibility' && (
+            <EligibilityChecker
+              metrics={metrics}
               activeSlug={activeSlug}
             />
           )}
@@ -1237,6 +1246,532 @@ function ParticipantCard({ s }) {
         </span>
       </div>
     </a>
+  );
+}
+
+// ─── EligibilityChecker ───────────────────────────────────────────────────────
+
+const OPERATORS   = ['>', '>=', '<', '<=', '='];
+const MODES = [
+  { value: 'average_all',    label: 'Average (all days)'    },
+  { value: 'average_last_n', label: 'Average (last N days)' },
+  { value: 'every_day',      label: 'Every day'             },
+  { value: 'at_least_n',     label: 'At least N days'       },
+  { value: 'any_day',        label: 'Any day'               },
+];
+
+function newCriterion() {
+  return { id: `c${Date.now()}${Math.random().toString(36).slice(2,6)}`, column: '', operator: '>', threshold: '', mode: 'average_all', n: 3 };
+}
+function newScenario(name = 'New Scenario') {
+  return { id: `s${Date.now()}${Math.random().toString(36).slice(2,6)}`, name, criteria: [newCriterion()] };
+}
+
+// Evaluate a single criterion against a participant's sorted rows (oldest→newest)
+function evalCriterion(rows, criterion) {
+  const { column, operator, threshold, mode, n } = criterion;
+  const thresh = parseFloat(threshold);
+  if (!column || isNaN(thresh)) return { pass: null, value: null, label: '—' };
+
+  const vals = rows
+    .map(r => parseFloat(r[column]))
+    .filter(v => !isNaN(v));
+
+  if (vals.length === 0) return { pass: null, value: null, label: 'no data' };
+
+  const compare = (v) => {
+    if (operator === '>')  return v >  thresh;
+    if (operator === '>=') return v >= thresh;
+    if (operator === '<')  return v <  thresh;
+    if (operator === '<=') return v <= thresh;
+    if (operator === '=')  return Math.abs(v - thresh) < 0.0001;
+    return false;
+  };
+
+  if (mode === 'average_all') {
+    const avg = vals.reduce((a,b) => a+b, 0) / vals.length;
+    return { pass: compare(avg), value: avg, label: avg.toFixed(2) };
+  }
+  if (mode === 'average_last_n') {
+    const slice = vals.slice(-Math.max(1, n));
+    const avg = slice.reduce((a,b) => a+b, 0) / slice.length;
+    return { pass: compare(avg), value: avg, label: `${avg.toFixed(2)} (last ${slice.length}d)` };
+  }
+  if (mode === 'every_day') {
+    const pass = vals.every(compare);
+    const pct  = Math.round(vals.filter(compare).length / vals.length * 100);
+    return { pass, value: pct, label: `${vals.filter(compare).length}/${vals.length} days` };
+  }
+  if (mode === 'at_least_n') {
+    const count = vals.filter(compare).length;
+    const pass  = count >= Math.max(1, n);
+    return { pass, value: count, label: `${count}/${vals.length} days` };
+  }
+  if (mode === 'any_day') {
+    const count = vals.filter(compare).length;
+    return { pass: count > 0, value: count, label: `${count}/${vals.length} days` };
+  }
+  return { pass: null, value: null, label: '—' };
+}
+
+// Evaluate all criteria for all participants — returns array of { pid, rows, results[], pass }
+function evalScenario(metrics, criteria) {
+  const byPid = {};
+  metrics.forEach(r => {
+    const pid = r['Subject ID'] || '?';
+    if (!byPid[pid]) byPid[pid] = [];
+    byPid[pid].push(r);
+  });
+  // Sort each participant's rows oldest→newest
+  Object.values(byPid).forEach(rows => rows.sort((a,b) => new Date(a['Date']) - new Date(b['Date'])));
+
+  return Object.entries(byPid).map(([pid, rows]) => {
+    const results = criteria.map(c => ({ criterion: c, ...evalCriterion(rows, c) }));
+    const evaluated = results.filter(r => r.pass !== null);
+    const pass = evaluated.length === criteria.length && evaluated.length > 0 && evaluated.every(r => r.pass);
+    const incomplete = evaluated.length < criteria.length;
+    return { pid, rows, results, pass, incomplete };
+  }).sort((a,b) => a.pid.localeCompare(b.pid));
+}
+
+function EligibilityChecker({ metrics, activeSlug }) {
+  const STORAGE_KEY = `eligibility_scenarios_${activeSlug}`;
+
+  // ── State ────────────────────────────────────────────────────────────────────
+  const [scenarios,      setScenarios]      = useState(() => {
+    try { const s = JSON.parse(localStorage.getItem(STORAGE_KEY)); return s?.length ? s : [newScenario('Protocol v1')]; }
+    catch { return [newScenario('Protocol v1')]; }
+  });
+  const [activeScenId,   setActiveScenId]   = useState(() => scenarios[0]?.id || '');
+  const [mode,           setMode]           = useState('single'); // 'single' | 'compare'
+  const [compareA,       setCompareA]       = useState(() => scenarios[0]?.id || '');
+  const [compareB,       setCompareB]       = useState(() => scenarios[1]?.id || scenarios[0]?.id || '');
+  const [renamingId,     setRenamingId]     = useState(null);
+  const [renameVal,      setRenameVal]      = useState('');
+
+  // Persist on change
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(scenarios)); } catch {}
+  }, [scenarios, STORAGE_KEY]);
+
+  // ── Numeric columns available in metrics ─────────────────────────────────────
+  const numericCols = useMemo(() => {
+    if (!metrics.length) return [];
+    return Object.keys(metrics[0]).filter(k => {
+      if (['Subject ID','Date','Condition','Acknowledgments','Tonight Checklist'].includes(k)) return false;
+      const vals = metrics.map(r => r[k]).filter(v => v !== '' && v != null);
+      return vals.length > 0 && vals.some(v => !isNaN(Number(v)));
+    });
+  }, [metrics]);
+
+  // ── Scenario helpers ─────────────────────────────────────────────────────────
+  const activeSeen = scenarios.find(s => s.id === activeScenId) || scenarios[0];
+
+  function updateScenario(id, updater) {
+    setScenarios(prev => prev.map(s => s.id === id ? { ...s, ...updater(s) } : s));
+  }
+  function addScenario() {
+    const s = newScenario(`Scenario ${scenarios.length + 1}`);
+    setScenarios(prev => [...prev, s]);
+    setActiveScenId(s.id);
+  }
+  function duplicateScenario(id) {
+    const src = scenarios.find(s => s.id === id);
+    if (!src) return;
+    const dup = { ...src, id: `s${Date.now()}`, name: `${src.name} (copy)`,
+      criteria: src.criteria.map(c => ({ ...c, id: `c${Date.now()}${Math.random().toString(36).slice(2,6)}` })) };
+    setScenarios(prev => [...prev, dup]);
+    setActiveScenId(dup.id);
+  }
+  function deleteScenario(id) {
+    if (scenarios.length <= 1) return;
+    const next = scenarios.filter(s => s.id !== id);
+    setScenarios(next);
+    if (activeScenId === id) setActiveScenId(next[0]?.id || '');
+    if (compareA === id) setCompareA(next[0]?.id || '');
+    if (compareB === id) setCompareB(next[next.length-1]?.id || next[0]?.id || '');
+  }
+
+  // ── Criteria helpers for active scenario ────────────────────────────────────
+  function addCriterion() {
+    updateScenario(activeScenId, s => ({ criteria: [...s.criteria, newCriterion()] }));
+  }
+  function updateCriterion(scenId, critId, patch) {
+    updateScenario(scenId, s => ({ criteria: s.criteria.map(c => c.id === critId ? { ...c, ...patch } : c) }));
+  }
+  function removeCriterion(critId) {
+    updateScenario(activeScenId, s => ({ criteria: s.criteria.filter(c => c.id !== critId) }));
+  }
+
+  // ── Results computation ──────────────────────────────────────────────────────
+  const activeResults = useMemo(() => {
+    if (!activeSeen) return [];
+    return evalScenario(metrics, activeSeen.criteria);
+  }, [metrics, activeSeen]);
+
+  const compareResultsA = useMemo(() => {
+    const scen = scenarios.find(s => s.id === compareA);
+    return scen ? evalScenario(metrics, scen.criteria) : [];
+  }, [metrics, scenarios, compareA]);
+
+  const compareResultsB = useMemo(() => {
+    const scen = scenarios.find(s => s.id === compareB);
+    return scen ? evalScenario(metrics, scen.criteria) : [];
+  }, [metrics, scenarios, compareB]);
+
+  // ── Helpers ──────────────────────────────────────────────────────────────────
+  const passCount    = activeResults.filter(r => r.pass).length;
+  const failCount    = activeResults.filter(r => !r.pass && !r.incomplete).length;
+  const incompleteCount = activeResults.filter(r => r.incomplete).length;
+
+  function deltaLabel(aPass, bPass) {
+    if (aPass && bPass)   return { label: '✓ Both',    color: 'bg-emerald-100 text-emerald-700' };
+    if (aPass && !bPass)  return { label: '✓ A only',  color: 'bg-blue-100 text-blue-700' };
+    if (!aPass && bPass)  return { label: '✓ B only',  color: 'bg-violet-100 text-violet-700' };
+    return                       { label: '✗ Neither', color: 'bg-slate-100 text-slate-500' };
+  }
+
+  const swingCount = useMemo(() => {
+    if (!compareResultsA.length || !compareResultsB.length) return 0;
+    const mapB = Object.fromEntries(compareResultsB.map(r => [r.pid, r.pass]));
+    return compareResultsA.filter(r => r.pass !== mapB[r.pid]).length;
+  }, [compareResultsA, compareResultsB]);
+
+  if (!metrics.length) {
+    return <p className="text-sm text-slate-400 py-8 text-center">No Daily Status data yet — eligibility checks require participant data.</p>;
+  }
+
+  // ── Render ───────────────────────────────────────────────────────────────────
+  return (
+    <div className="space-y-5">
+
+      {/* ── Header row ── */}
+      <div className="flex items-center justify-between gap-4 flex-wrap">
+        <div>
+          <h2 className="text-sm font-bold text-slate-800">Eligibility Checker</h2>
+          <p className="text-xs text-slate-400 mt-0.5">Define criteria sets and see which participants qualify for phase advancement.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => setMode('single')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${mode === 'single' ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'}`}>
+            Single
+          </button>
+          <button onClick={() => setMode('compare')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${mode === 'compare' ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'}`}>
+            Compare
+          </button>
+        </div>
+      </div>
+
+      {/* ── Scenario tabs ── */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide mr-1">Scenarios</span>
+          {scenarios.map(s => (
+            <div key={s.id} className="relative group flex items-center">
+              {renamingId === s.id ? (
+                <input
+                  autoFocus
+                  value={renameVal}
+                  onChange={e => setRenameVal(e.target.value)}
+                  onBlur={() => { updateScenario(s.id, () => ({ name: renameVal || s.name })); setRenamingId(null); }}
+                  onKeyDown={e => { if (e.key === 'Enter') { updateScenario(s.id, () => ({ name: renameVal || s.name })); setRenamingId(null); } if (e.key === 'Escape') setRenamingId(null); }}
+                  className="text-xs px-2 py-1 border border-violet-400 rounded-lg w-32 focus:outline-none focus:ring-2 focus:ring-violet-300"
+                />
+              ) : (
+                <button
+                  onClick={() => setActiveScenId(s.id)}
+                  onDoubleClick={() => { setRenamingId(s.id); setRenameVal(s.name); }}
+                  title="Click to select · Double-click to rename"
+                  className={`text-xs px-3 py-1.5 rounded-lg font-semibold transition border ${
+                    activeScenId === s.id
+                      ? 'bg-violet-50 border-violet-300 text-violet-700'
+                      : 'bg-slate-50 border-slate-200 text-slate-600 hover:border-slate-300'
+                  }`}>
+                  {s.name}
+                </button>
+              )}
+              {/* Actions on hover */}
+              <div className="absolute -top-7 left-1/2 -translate-x-1/2 hidden group-hover:flex items-center gap-1 bg-white border border-slate-200 rounded-lg shadow-sm px-1 py-0.5 z-10">
+                <button onClick={() => duplicateScenario(s.id)} title="Duplicate" className="p-1 hover:text-violet-600 text-slate-400 transition text-[10px]">⎘</button>
+                {scenarios.length > 1 && (
+                  <button onClick={() => deleteScenario(s.id)} title="Delete" className="p-1 hover:text-red-500 text-slate-400 transition text-[10px]">✕</button>
+                )}
+              </div>
+            </div>
+          ))}
+          <button onClick={addScenario}
+            className="text-xs px-2.5 py-1.5 rounded-lg border border-dashed border-slate-300 text-slate-400 hover:border-violet-400 hover:text-violet-600 transition font-semibold">
+            + New
+          </button>
+        </div>
+        <p className="text-[10px] text-slate-400">Double-click a scenario name to rename it. Hover for duplicate/delete.</p>
+      </div>
+
+      {/* ── Criteria builder for active scenario ── */}
+      {mode === 'single' && activeSeen && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xs font-bold text-slate-700">Criteria — {activeSeen.name}</h3>
+            <button onClick={addCriterion}
+              className="text-xs px-3 py-1.5 bg-violet-50 hover:bg-violet-100 text-violet-700 rounded-lg font-semibold transition border border-violet-200">
+              + Add criterion
+            </button>
+          </div>
+
+          {activeSeen.criteria.length === 0 && (
+            <p className="text-xs text-slate-400 py-2">No criteria yet. Add one above.</p>
+          )}
+
+          <div className="space-y-2">
+            {activeSeen.criteria.map((c, idx) => (
+              <div key={c.id} className="grid grid-cols-[auto_1fr] gap-3 items-start">
+                {/* Row number */}
+                <span className="text-[10px] text-slate-400 font-mono pt-2.5 w-5 text-right">{idx+1}</span>
+                {/* Criterion fields */}
+                <div className="flex flex-wrap gap-2 items-center bg-slate-50 rounded-xl px-3 py-2">
+                  {/* Column */}
+                  <select value={c.column} onChange={e => updateCriterion(activeScenId, c.id, { column: e.target.value })}
+                    className="text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-300 min-w-[140px]">
+                    <option value="">— column —</option>
+                    {numericCols.map(col => <option key={col} value={col}>{col}</option>)}
+                  </select>
+                  {/* Operator */}
+                  <select value={c.operator} onChange={e => updateCriterion(activeScenId, c.id, { operator: e.target.value })}
+                    className="text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-300 w-16">
+                    {OPERATORS.map(op => <option key={op} value={op}>{op}</option>)}
+                  </select>
+                  {/* Threshold */}
+                  <input type="number" value={c.threshold} onChange={e => updateCriterion(activeScenId, c.id, { threshold: e.target.value })}
+                    placeholder="value"
+                    className="text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-300 w-20" />
+                  {/* Mode */}
+                  <select value={c.mode} onChange={e => updateCriterion(activeScenId, c.id, { mode: e.target.value })}
+                    className="text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-300">
+                    {MODES.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
+                  </select>
+                  {/* N input — only for modes that need it */}
+                  {(c.mode === 'average_last_n' || c.mode === 'at_least_n') && (
+                    <div className="flex items-center gap-1">
+                      <span className="text-xs text-slate-500">N =</span>
+                      <input type="number" min="1" value={c.n} onChange={e => updateCriterion(activeScenId, c.id, { n: parseInt(e.target.value) || 1 })}
+                        className="text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-300 w-16" />
+                    </div>
+                  )}
+                  {/* Remove */}
+                  {activeSeen.criteria.length > 1 && (
+                    <button onClick={() => removeCriterion(c.id)}
+                      className="ml-auto text-slate-300 hover:text-red-400 transition p-1 rounded-lg hover:bg-red-50 text-xs">
+                      ✕
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* ── Compare mode: criteria editors side by side ── */}
+      {mode === 'compare' && (
+        <div className="grid grid-cols-2 gap-4">
+          {[{ id: compareA, setId: setCompareA, label: 'A' }, { id: compareB, setId: setCompareB, label: 'B' }].map(({ id, setId, label }) => {
+            const scen = scenarios.find(s => s.id === id) || scenarios[0];
+            return (
+              <div key={label} className="bg-white rounded-2xl border border-slate-200 p-4 space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white ${label === 'A' ? 'bg-blue-500' : 'bg-violet-500'}`}>{label}</span>
+                  <select value={id} onChange={e => setId(e.target.value)}
+                    className="text-xs px-2 py-1.5 rounded-lg border border-slate-200 bg-white focus:outline-none focus:ring-2 focus:ring-violet-300 flex-1">
+                    {scenarios.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                  </select>
+                </div>
+                {scen && (
+                  <div className="space-y-1.5">
+                    {scen.criteria.map((c, idx) => (
+                      <div key={c.id} className="text-xs bg-slate-50 rounded-lg px-3 py-2 flex flex-wrap gap-x-2 gap-y-0.5 items-center">
+                        <span className="text-slate-400 font-mono">{idx+1}.</span>
+                        <span className="font-semibold text-slate-700">{c.column || '—'}</span>
+                        <span className="text-slate-500">{c.operator}</span>
+                        <span className="font-semibold text-slate-700">{c.threshold !== '' ? c.threshold : '—'}</span>
+                        <span className="text-slate-400 ml-1">({MODES.find(m => m.value === c.mode)?.label}{(c.mode === 'average_last_n' || c.mode === 'at_least_n') ? `, N=${c.n}` : ''})</span>
+                      </div>
+                    ))}
+                    {scen.criteria.length === 0 && <p className="text-xs text-slate-400">No criteria.</p>}
+                  </div>
+                )}
+                <button onClick={() => { setActiveScenId(id); setMode('single'); }}
+                  className="text-[10px] text-violet-500 hover:text-violet-700 transition">
+                  Edit this scenario →
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* ── Summary bar ── */}
+      {mode === 'single' && (
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label: 'Eligible',    count: passCount,       color: 'bg-emerald-50 border-emerald-200 text-emerald-700' },
+            { label: 'Not eligible', count: failCount,      color: 'bg-red-50 border-red-200 text-red-600' },
+            { label: 'Incomplete',  count: incompleteCount, color: 'bg-amber-50 border-amber-200 text-amber-600' },
+          ].map(({ label, count, color }) => (
+            <div key={label} className={`rounded-xl border px-4 py-3 text-center ${color}`}>
+              <div className="text-2xl font-bold">{count}</div>
+              <div className="text-xs font-medium mt-0.5">{label}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {mode === 'compare' && compareResultsA.length > 0 && compareResultsB.length > 0 && (
+        <div className="grid grid-cols-4 gap-3">
+          {(() => {
+            const mapB = Object.fromEntries(compareResultsB.map(r => [r.pid, r.pass]));
+            const aa = compareResultsA.filter(r => r.pass && mapB[r.pid]).length;
+            const ab = compareResultsA.filter(r => r.pass && !mapB[r.pid]).length;
+            const ba = compareResultsA.filter(r => !r.pass && mapB[r.pid]).length;
+            const nn = compareResultsA.filter(r => !r.pass && !mapB[r.pid]).length;
+            return [
+              { label: '✓ Both',    count: aa, color: 'bg-emerald-50 border-emerald-200 text-emerald-700' },
+              { label: '✓ A only',  count: ab, color: 'bg-blue-50 border-blue-200 text-blue-700' },
+              { label: '✓ B only',  count: ba, color: 'bg-violet-50 border-violet-200 text-violet-700' },
+              { label: '✗ Neither', count: nn, color: 'bg-slate-50 border-slate-200 text-slate-500' },
+            ].map(({ label, count, color }) => (
+              <div key={label} className={`rounded-xl border px-4 py-3 text-center ${color}`}>
+                <div className="text-2xl font-bold">{count}</div>
+                <div className="text-xs font-medium mt-0.5">{label}</div>
+              </div>
+            ));
+          })()}
+        </div>
+      )}
+
+      {mode === 'compare' && swingCount > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-xs text-amber-700 font-medium">
+          ⚠️ {swingCount} participant{swingCount !== 1 ? 's' : ''} change eligibility between the two scenarios — review them below.
+        </div>
+      )}
+
+      {/* ── Results table — single mode ── */}
+      {mode === 'single' && activeSeen && activeResults.length > 0 && (
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50">
+                  <th className="text-left px-4 py-3 font-semibold text-slate-600 sticky left-0 bg-slate-50">Participant</th>
+                  <th className="text-center px-3 py-3 font-semibold text-slate-600">Nights</th>
+                  {activeSeen.criteria.map((c, i) => (
+                    <th key={c.id} className="text-center px-3 py-3 font-semibold text-slate-600 min-w-[120px]">
+                      <div className="text-slate-700">{c.column || `Rule ${i+1}`}</div>
+                      <div className="text-slate-400 font-normal">{c.operator} {c.threshold} · {MODES.find(m=>m.value===c.mode)?.label}{(c.mode==='average_last_n'||c.mode==='at_least_n')?`, N=${c.n}`:''}</div>
+                    </th>
+                  ))}
+                  <th className="text-center px-4 py-3 font-semibold text-slate-600 sticky right-0 bg-slate-50">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeResults.map(({ pid, rows, results, pass, incomplete }) => (
+                  <tr key={pid} className={`border-b border-slate-50 hover:bg-slate-50 transition ${pass ? 'bg-emerald-50/30' : ''}`}>
+                    <td className="px-4 py-3 font-semibold text-slate-800 sticky left-0 bg-inherit">{pid}</td>
+                    <td className="px-3 py-3 text-center text-slate-500">{rows.length}</td>
+                    {results.map(r => (
+                      <td key={r.criterion.id} className="px-3 py-3 text-center">
+                        {r.pass === null ? (
+                          <span className="text-slate-300">—</span>
+                        ) : (
+                          <div className="flex flex-col items-center gap-0.5">
+                            <span className={`inline-flex items-center justify-center w-5 h-5 rounded-full text-[10px] font-bold ${r.pass ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-600'}`}>
+                              {r.pass ? '✓' : '✗'}
+                            </span>
+                            <span className="text-[10px] text-slate-400">{r.label}</span>
+                          </div>
+                        )}
+                      </td>
+                    ))}
+                    <td className="px-4 py-3 text-center sticky right-0 bg-inherit">
+                      {incomplete ? (
+                        <span className="inline-block px-2 py-1 rounded-full bg-amber-100 text-amber-700 font-semibold text-[10px]">Incomplete</span>
+                      ) : pass ? (
+                        <span className="inline-block px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 font-semibold text-[10px]">✓ Eligible</span>
+                      ) : (
+                        <span className="inline-block px-2 py-1 rounded-full bg-red-100 text-red-600 font-semibold text-[10px]">✗ Not eligible</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ── Results table — compare mode ── */}
+      {mode === 'compare' && compareResultsA.length > 0 && (
+        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-slate-100 bg-slate-50">
+                  <th className="text-left px-4 py-3 font-semibold text-slate-600">Participant</th>
+                  <th className="text-center px-3 py-3 font-semibold text-slate-600">Nights</th>
+                  <th className="text-center px-3 py-3 font-semibold text-blue-600">
+                    <span className="w-4 h-4 rounded-full bg-blue-500 text-white inline-flex items-center justify-center text-[10px] font-bold mr-1">A</span>
+                    {scenarios.find(s => s.id === compareA)?.name || 'Scenario A'}
+                  </th>
+                  <th className="text-center px-3 py-3 font-semibold text-violet-600">
+                    <span className="w-4 h-4 rounded-full bg-violet-500 text-white inline-flex items-center justify-center text-[10px] font-bold mr-1">B</span>
+                    {scenarios.find(s => s.id === compareB)?.name || 'Scenario B'}
+                  </th>
+                  <th className="text-center px-4 py-3 font-semibold text-slate-600">Delta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(() => {
+                  const mapB = Object.fromEntries(compareResultsB.map(r => [r.pid, r]));
+                  return compareResultsA.map(rA => {
+                    const rB = mapB[rA.pid];
+                    const isSwing = rB && rA.pass !== rB.pass;
+                    const { label: dLabel, color: dColor } = deltaLabel(rA.pass, rB?.pass ?? false);
+                    return (
+                      <tr key={rA.pid} className={`border-b border-slate-50 hover:bg-slate-50 transition ${isSwing ? 'bg-amber-50/40' : ''}`}>
+                        <td className="px-4 py-3 font-semibold text-slate-800">
+                          {rA.pid}
+                          {isSwing && <span className="ml-2 text-[9px] bg-amber-200 text-amber-800 px-1.5 py-0.5 rounded-full font-bold">swing</span>}
+                        </td>
+                        <td className="px-3 py-3 text-center text-slate-500">{rA.rows.length}</td>
+                        <td className="px-3 py-3 text-center">
+                          {rA.incomplete
+                            ? <span className="text-amber-500 font-semibold">Incomplete</span>
+                            : rA.pass
+                            ? <span className="text-emerald-600 font-semibold">✓ Eligible</span>
+                            : <span className="text-red-500 font-semibold">✗ No</span>}
+                        </td>
+                        <td className="px-3 py-3 text-center">
+                          {!rB ? <span className="text-slate-300">—</span>
+                            : rB.incomplete
+                            ? <span className="text-amber-500 font-semibold">Incomplete</span>
+                            : rB.pass
+                            ? <span className="text-emerald-600 font-semibold">✓ Eligible</span>
+                            : <span className="text-red-500 font-semibold">✗ No</span>}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {rB && <span className={`inline-block px-2 py-1 rounded-full font-semibold text-[10px] ${dColor}`}>{dLabel}</span>}
+                        </td>
+                      </tr>
+                    );
+                  });
+                })()}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+    </div>
   );
 }
 
