@@ -1437,6 +1437,82 @@ function EligibilityChecker({ metrics, activeSlug }) {
     return compareResultsA.filter(r => r.pass !== mapB[r.pid]).length;
   }, [compareResultsA, compareResultsB]);
 
+  // ── Slack update generator ────────────────────────────────────────────────
+  const [slackText,    setSlackText]    = useState('');
+  const [slackCopied,  setSlackCopied]  = useState(false);
+
+  function generateSlackUpdate() {
+    const scen  = mode === 'single' ? activeSeen : null;
+    const today = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+    const study = activeSlug ? activeSlug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : 'Study';
+
+    let lines = [];
+
+    if (mode === 'single' && scen) {
+      lines.push(`:clipboard: *Eligibility Update — ${study}*`);
+      lines.push(`_${today} · Scenario: ${scen.name}_`);
+      lines.push('');
+
+      const total    = activeResults.length;
+      const eligible = activeResults.filter(r => r.pass).length;
+      const notElig  = activeResults.filter(r => !r.pass && !r.incomplete).length;
+      const incomp   = activeResults.filter(r => r.incomplete).length;
+
+      lines.push(`*${eligible} of ${total} participant${total !== 1 ? 's' : ''} eligible for phase advancement*`);
+      lines.push('');
+
+      // Per-participant
+      activeResults.forEach(({ pid, rows, pass, incomplete, results }) => {
+        const icon = incomplete ? ':warning:' : pass ? ':white_check_mark:' : ':x:';
+        const status = incomplete ? 'Incomplete data' : pass ? 'Eligible' : 'Not eligible';
+        const failing = results.filter(r => r.pass === false).map(r => r.criterion.column).join(', ');
+        const detail = (!pass && !incomplete && failing) ? ` _(failed: ${failing})_` : '';
+        lines.push(`${icon} *${pid}* — ${status}${detail} · ${rows.length} night${rows.length !== 1 ? 's' : ''}`);
+      });
+
+      lines.push('');
+      lines.push('*Criteria:*');
+      scen.criteria.forEach((c, i) => {
+        const modeLabel = MODES.find(m => m.value === c.mode)?.label || c.mode;
+        const nPart = (c.mode === 'average_last_n' || c.mode === 'at_least_n') ? `, N=${c.n}` : '';
+        lines.push(`  ${i + 1}. ${c.column} ${c.operator} ${c.threshold}  _(${modeLabel}${nPart})_`);
+      });
+
+      if (incomp > 0) lines.push('', `_:warning: ${incomp} participant${incomp !== 1 ? 's' : ''} have incomplete data and could not be fully evaluated._`);
+
+    } else if (mode === 'compare') {
+      const scenA = scenarios.find(s => s.id === compareA);
+      const scenB = scenarios.find(s => s.id === compareB);
+      lines.push(`:bar_chart: *Eligibility Comparison — ${study}*`);
+      lines.push(`_${today}_`);
+      lines.push('');
+      lines.push(`*Scenario A:* ${scenA?.name || '—'}   |   *Scenario B:* ${scenB?.name || '—'}`);
+      lines.push('');
+
+      const mapB = Object.fromEntries(compareResultsB.map(r => [r.pid, r]));
+      const both  = compareResultsA.filter(r => r.pass && mapB[r.pid]?.pass);
+      const aOnly = compareResultsA.filter(r => r.pass && !mapB[r.pid]?.pass);
+      const bOnly = compareResultsA.filter(r => !r.pass && mapB[r.pid]?.pass);
+      const neither = compareResultsA.filter(r => !r.pass && !mapB[r.pid]?.pass);
+
+      lines.push(`*:white_check_mark: Eligible under both (${both.length}):* ${both.map(r => r.pid).join(', ') || '—'}`);
+      lines.push(`*:large_blue_circle: A only (${aOnly.length}):* ${aOnly.map(r => r.pid).join(', ') || '—'}`);
+      lines.push(`*:purple_circle: B only (${bOnly.length}):* ${bOnly.map(r => r.pid).join(', ') || '—'}`);
+      lines.push(`*:x: Neither (${neither.length}):* ${neither.map(r => r.pid).join(', ') || '—'}`);
+      if (swingCount > 0) lines.push('', `_:arrows_counterclockwise: ${swingCount} participant${swingCount !== 1 ? 's' : ''} change eligibility between scenarios._`);
+    }
+
+    setSlackText(lines.join('\n'));
+    setSlackCopied(false);
+  }
+
+  function copySlack() {
+    navigator.clipboard.writeText(slackText).then(() => {
+      setSlackCopied(true);
+      setTimeout(() => setSlackCopied(false), 2000);
+    });
+  }
+
   if (!metrics.length) {
     return <p className="text-sm text-slate-400 py-8 text-center">No Daily Status data yet — eligibility checks require participant data.</p>;
   }
@@ -1459,6 +1535,13 @@ function EligibilityChecker({ metrics, activeSlug }) {
           <button onClick={() => setMode('compare')}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${mode === 'compare' ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-600 hover:border-slate-300'}`}>
             Compare
+          </button>
+          <button onClick={generateSlackUpdate}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#4A154B] hover:bg-[#611f64] text-white transition">
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M5.042 15.165a2.528 2.528 0 01-2.52 2.523A2.528 2.528 0 010 15.165a2.527 2.527 0 012.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 012.521-2.52 2.527 2.527 0 012.521 2.52v6.313A2.528 2.528 0 018.834 24a2.528 2.528 0 01-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 01-2.521-2.52A2.528 2.528 0 018.834 0a2.527 2.527 0 012.521 2.522v2.52H8.834zM8.834 6.313a2.527 2.527 0 012.521 2.521 2.527 2.527 0 01-2.521 2.521H2.522A2.528 2.528 0 010 8.834a2.528 2.528 0 012.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 012.522-2.521A2.528 2.528 0 0124 8.834a2.527 2.527 0 01-2.522 2.521h-2.522V8.834zM17.687 8.834a2.527 2.527 0 01-2.521 2.521 2.526 2.526 0 01-2.521-2.521V2.522A2.527 2.527 0 0115.166 0a2.528 2.528 0 012.521 2.522v6.312zM15.166 18.956a2.528 2.528 0 012.521 2.522A2.528 2.528 0 0115.166 24a2.527 2.527 0 01-2.521-2.522v-2.522h2.521zM15.166 17.687a2.527 2.527 0 01-2.521-2.521 2.527 2.527 0 012.521-2.521h6.312A2.528 2.528 0 0124 15.165a2.528 2.528 0 01-2.522 2.522h-6.312z"/>
+            </svg>
+            Slack update
           </button>
         </div>
       </div>
@@ -1652,6 +1735,35 @@ function EligibilityChecker({ metrics, activeSlug }) {
       {mode === 'compare' && swingCount > 0 && (
         <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-2.5 text-xs text-amber-700 font-medium">
           ⚠️ {swingCount} participant{swingCount !== 1 ? 's' : ''} change eligibility between the two scenarios — review them below.
+        </div>
+      )}
+
+      {/* ── Slack output panel ── */}
+      {slackText && (
+        <div className="bg-[#1a1d21] rounded-2xl border border-slate-700 p-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <svg className="w-4 h-4 text-white/60" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M5.042 15.165a2.528 2.528 0 01-2.52 2.523A2.528 2.528 0 010 15.165a2.527 2.527 0 012.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 012.521-2.52 2.527 2.527 0 012.521 2.52v6.313A2.528 2.528 0 018.834 24a2.528 2.528 0 01-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 01-2.521-2.52A2.528 2.528 0 018.834 0a2.527 2.527 0 012.521 2.522v2.52H8.834zM8.834 6.313a2.527 2.527 0 012.521 2.521 2.527 2.527 0 01-2.521 2.521H2.522A2.528 2.528 0 010 8.834a2.528 2.528 0 012.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 012.522-2.521A2.528 2.528 0 0124 8.834a2.527 2.527 0 01-2.522 2.521h-2.522V8.834zM17.687 8.834a2.527 2.527 0 01-2.521 2.521 2.526 2.526 0 01-2.521-2.521V2.522A2.527 2.527 0 0115.166 0a2.528 2.528 0 012.521 2.522v6.312zM15.166 18.956a2.528 2.528 0 012.521 2.522A2.528 2.528 0 0115.166 24a2.527 2.527 0 01-2.521-2.522v-2.522h2.521zM15.166 17.687a2.527 2.527 0 01-2.521-2.521 2.527 2.527 0 012.521-2.521h6.312A2.528 2.528 0 0124 15.165a2.528 2.528 0 01-2.522 2.522h-6.312z"/>
+              </svg>
+              <span className="text-xs font-semibold text-white/80">Slack message ready</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button onClick={copySlack}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${slackCopied ? 'bg-emerald-500 text-white' : 'bg-white/10 hover:bg-white/20 text-white'}`}>
+                {slackCopied ? '✓ Copied!' : 'Copy'}
+              </button>
+              <button onClick={() => setSlackText('')}
+                className="text-white/30 hover:text-white/60 transition text-xs px-2 py-1.5">✕</button>
+            </div>
+          </div>
+          <textarea
+            readOnly
+            value={slackText}
+            rows={Math.min(20, slackText.split('\n').length + 1)}
+            className="w-full bg-[#222529] text-[#d1d2d3] text-xs font-mono rounded-xl px-3 py-2.5 border border-white/10 focus:outline-none resize-none leading-relaxed"
+          />
+          <p className="text-[10px] text-white/30">Slack renders *bold*, _italic_, and :emoji: codes automatically.</p>
         </div>
       )}
 
